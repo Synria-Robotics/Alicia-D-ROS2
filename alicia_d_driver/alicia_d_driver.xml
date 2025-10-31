@@ -1,0 +1,9 @@
+<library path="alicia_hardware_interface">
+  <class name="alicia_d_driver/AliciaHardwareInterface"
+         type="alicia_d_hardware_interface::AliciaHardwareInterface"
+         base_class_type="hardware_interface::SystemInterface">
+    <description>
+      ros2_control hardware interface for the Alicia Duo robotic arm.
+    </description>
+  </class>
+</library>

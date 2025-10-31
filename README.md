@@ -15,11 +15,11 @@
 
 ## 2. 系统架构
 
-系统由四个主要节点组成，它们都在 `alicia_duo_driver` 包中，共同构成完整的控制链路：
+系统由四个主要节点组成，它们都在 `alicia_d_driver` 包中，共同构成完整的控制链路：
 
 | 节点名称 (Launch 中) | 可执行文件                     | 语言 | 功能描述                                                                 |
 | :------------------- | :------------------------------- | :--- | :----------------------------------------------------------------------- |
-| `serial_driver`      | `alicia_duo_driver_node`       | C++  | 负责与硬件串口通信，处理原始数据帧的收发（订阅 `/send_serial_data`，发布 `/read_serial_data`）。 |
+| `serial_driver`      | `alicia_d_driver_node`       | C++  | 负责与硬件串口通信，处理原始数据帧的收发（订阅 `/send_serial_data`，发布 `/read_serial_data`）。 |
 | `serial_dispatcher`  | `serial_dispatcher_node.py`    | Py   | 订阅 `/read_serial_data`，根据命令码将原始数据帧分类转发至对应处理节点的话题（如 `/servo_states`, `/gripper_angle`, `/error_frame_deal`）。 |
 | `joint_state_publisher` | `joint_state_publisher_node.py`| Py   | 订阅 `/servo_states` 和 `/gripper_angle`，处理硬件状态数据，转换为标准关节状态（弧度）并发布到 `/arm_joint_state`。 |
 | `arm_control`        | `arm_control_node.py`          | Py   | 订阅标准关节命令 (`/arm_joint_command`)、单独夹爪命令 (`/gripper_control`) 及其他控制命令，转换为硬件协议格式并发布到 `/send_serial_data`。 |
@@ -47,32 +47,7 @@
 | `/servo_states`      | `std_msgs/msg/UInt8MultiArray`     | `serial_dispatcher` -> `joint_state_publisher` | 分发出的原始舵机状态帧 (CMD 0x04)。            |                |
 | `/servo_states_main` | `std_msgs/msg/Float32MultiArray`   | `joint_state_publisher` -> | 兼容 ROS 1 的关节状态数组发布（弧度）。      |
 
-### 3.3 消息类型定义 (`alicia_duo_driver/msg/ArmJointState.msg`)
 
-```protobuf
-# 标准机械臂关节状态/命令消息 (ROS 2)
-# 所有角度使用弧度作为单位
-
-std_msgs/Header header
-
-# 六个主要关节角度 (弧度)
-float32 joint1  # 底座旋转关节
-float32 joint2  # 肩部关节
-float32 joint3  # 肘部关节
-float32 joint4  # 腕部旋转关节
-float32 joint5  # 腕部俯仰关节
-float32 joint6  # 腕部翻转关节
-
-# Button states (从夹爪状态帧中获取)
-int32 but1
-int32 but2
-
-# 夹爪角度 (弧度)
-float32 gripper
-
-# 可选的运动控制参数 (当前版本代码中未使用 time 字段)
-# float32 time    # 运动时间(秒)，默认为0表示立即执行
-```
 
 ### 3.4 数据单位与限制
 
@@ -106,6 +81,10 @@ float32 gripper
     sudo apt install python3-numpy # 或者 pip3 install numpy
     ```
     (`rclpy` 和 `std_msgs` Python 库通常随 ROS 2 Desktop 一起安装)。
+* 
+```
+sudo apt-get install -y ros-humble-asio-cmake-module ros-humble-io-context
+```
 
 ### 4.2 获取源代码
 
@@ -113,7 +92,7 @@ float32 gripper
     ```bash
     mkdir -p ~/alicia_ws/src
     cd ~/alicia_ws
-    git clone https://github.com/Xuanya-Robotics/Alicia-D-ROS2.git ./src
+    git clone https://github.com/Synria-Robotics/Alicia-D-ROS2.git ./src
     ```
 
 ### 4.3 编译工作空间
@@ -174,12 +153,20 @@ source ~/.bashrc
     ```
     记下你的设备名称 (例如 `ttyUSB0`)。
 
+
+
+
 ## 5. 系统启动
 
 使用提供的 Launch 文件启动所有节点：
 
 ```bash
-ros2 launch alicia_duo_driver alicia_duo_driver.launch.py [参数名称:=参数值 ...]
+ros2 launch alicia_d_driver alicia_d_driver.launch.py [参数名称:=参数值 ...]
+```
+
+rviz only:
+```
+ros2 launch alicia_d_descriptions display.launch.py robot_version:=v5_6 gripper_type:=100mm
 ```
 
 
@@ -189,7 +176,7 @@ ros2 launch alicia_duo_driver alicia_duo_driver.launch.py [参数名称:=参数�
 ```
 ros2 launch alicia_duo_moveit demo.launch.py 
 ```
-在`alicia_duo_driver.launch.py`运行的同时，运行上述指令可以通过`moveit`控制机械臂
+在`alicia_d_driver.launch.py`运行的同时，运行上述指令可以通过`moveit`控制机械臂
 
 
 ## 7. 故障排除

@@ -1,0 +1,31 @@
+# MoveIt uses this configuration for controller management
+
+moveit_controller_manager: moveit_simple_controller_manager/MoveItSimpleControllerManager
+
+moveit_simple_controller_manager:
+  update_rate: 500
+  controller_names:
+    - Alicia_controller
+    - Gripper_controller
+
+  Alicia_controller:
+    type: FollowJointTrajectory
+    action_ns: follow_joint_trajectory 
+    default: true 
+    joints:
+      - Joint1
+      - Joint2
+      - Joint3
+      - Joint4
+      - Joint5
+      - Joint6
+    action_ns: follow_joint_trajectory
+    default: true
+  Gripper_controller:
+    type: FollowJointTrajectory
+    action_ns: follow_joint_trajectory 
+    default: true 
+    joints:
+      - right_finger
+    action_ns: follow_joint_trajectory
+    default: true

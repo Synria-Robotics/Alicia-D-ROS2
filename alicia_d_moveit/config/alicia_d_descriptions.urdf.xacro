@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="alicia_d_descriptions">
+    <xacro:arg name="initial_positions_file" default="initial_positions.yaml" />
+
+    <!-- Import alicia_d_descriptions urdf file -->
+    <xacro:include filename="$(find alicia_d_descriptions)/urdf/Alicia_D_v5_6/Alicia_D_gripper_50mm.urdf" />
+
+    <!-- Import control_xacro -->
+    <xacro:include filename="alicia_d_descriptions.ros2_control.xacro" />
+
+
+    <!-- <xacro:alicia_d_descriptions_ros2_control name="AliciaDuoSystem" initial_positions_file="$(arg initial_positions_file)"/> -->
+    <xacro:alicia_d_descriptions_ros2_control name="FakeSystem" initial_positions_file="$(arg initial_positions_file)"/>
+
+</robot>

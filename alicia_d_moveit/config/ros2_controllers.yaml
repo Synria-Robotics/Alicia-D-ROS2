@@ -1,0 +1,40 @@
+# This config file is used by ros2_control
+controller_manager:
+  ros__parameters:
+    update_rate: 500  # Hz
+
+    Alicia_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+
+    Gripper_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+Alicia_controller:
+  ros__parameters:
+    joints:
+      - Joint1
+      - Joint2
+      - Joint3
+      - Joint4
+      - Joint5
+      - Joint6
+    command_interfaces:
+      - position
+    state_interfaces:
+      - position
+Gripper_controller:
+  ros__parameters:
+    joints:
+      - right_finger
+    command_interfaces:
+      - position
+    state_interfaces:
+      - position
+joint_state_broadcaster:
+  ros__parameters:
+    publish_topic: "/joint_states"
