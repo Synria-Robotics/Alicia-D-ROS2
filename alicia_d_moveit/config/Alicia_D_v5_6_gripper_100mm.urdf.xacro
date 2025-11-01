@@ -1,6 +1,12 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="Alicia_D_v5_6_gripper_100mm">
     <xacro:arg name="initial_positions_file" default="initial_positions.yaml" />
+    <xacro:arg name="hw_port" default="/dev/ttyCH341USB0" />
+    <xacro:arg name="hw_baud_rate" default="1000000" />
+    <xacro:arg name="hw_debug_mode" default="false" />
+    <xacro:arg name="hw_servo_count" default="9" />
+    <xacro:arg name="hw_gripper_type" default="100mm" />
+    <xacro:arg name="hw_firmware_version" default="auto" />
 
     <!-- Import alicia_d_descriptions urdf file for v5_6 100mm -->
     <xacro:include filename="$(find alicia_d_descriptions)/urdf/Alicia_D_v5_6/Alicia_D_gripper_100mm.urdf" />
@@ -8,8 +14,16 @@
     <!-- Import control_xacro -->
     <xacro:include filename="alicia_d_descriptions.ros2_control.xacro" />
 
-    <!-- Use FakeSystem for demo mode -->
-    <xacro:alicia_d_descriptions_ros2_control name="FakeSystem" initial_positions_file="$(arg initial_positions_file)"/>
+    <!-- Use ros2_control with configurable hardware interface -->
+    <xacro:alicia_d_descriptions_ros2_control 
+        name="AliciaDHardware" 
+        initial_positions_file="$(arg initial_positions_file)"
+        hw_port="$(arg hw_port)"
+        hw_baud_rate="$(arg hw_baud_rate)"
+        hw_debug_mode="$(arg hw_debug_mode)"
+        hw_servo_count="$(arg hw_servo_count)"
+        hw_gripper_type="$(arg hw_gripper_type)"
+        hw_firmware_version="$(arg hw_firmware_version)"/>
 
 </robot>
 

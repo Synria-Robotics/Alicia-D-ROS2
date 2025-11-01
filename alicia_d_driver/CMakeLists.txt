@@ -1,99 +1,119 @@
-cmake_minimum_required(VERSION 3.8)
-project(alicia_d_driver)
+cmake_minimum_required(VERSION 3.16)
+project(alicia_d_driver LANGUAGES CXX)
 
-if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-  add_compile_options(-Wall -Wextra -Wpedantic)
+if(CMAKE_CXX_COMPILER_ID MATCHES "(GNU|Clang)")
+  add_compile_options(-Wall -Wextra)
 endif()
 
-# 1. Find all necessary packages
-find_package(ament_cmake REQUIRED)
-find_package(hardware_interface REQUIRED)
-find_package(pluginlib REQUIRED)
-find_package(rclcpp REQUIRED)
-find_package(rclcpp_lifecycle REQUIRED)
-find_package(serial_driver REQUIRED)
-find_package(std_msgs REQUIRED)
-find_package(PkgConfig REQUIRED)  # <--- Add this
+# Set the same behavior for windows as it is on linux
+set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
-# 2. Use pkg-config to find libserial
-pkg_check_modules(PC_SERIAL REQUIRED IMPORTED_TARGET libserial)
-
-# No custom messages; skip rosidl generation
-
-# 4. Build the reusable serial communicator library
-add_library(serial_communicator_lib SHARED src/serial_communicator.cpp)
-target_include_directories(serial_communicator_lib PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  $<INSTALL_INTERFACE:include>
-  ${PC_SERIAL_INCLUDE_DIRS}
+# Find dependencies
+set(HW_IF_INCLUDE_DEPENDS
+  pluginlib
+  rcpputils
+  hardware_interface
+  rclcpp
+  rclcpp_lifecycle
 )
-ament_target_dependencies(serial_communicator_lib
+
+set(NODE_INCLUDE_DEPENDS
   rclcpp
   std_msgs
   sensor_msgs
-  serial_driver
 )
-target_link_libraries(serial_communicator_lib
+
+find_package(ament_cmake REQUIRED)
+find_package(PkgConfig REQUIRED)
+foreach(Dependency IN ITEMS ${HW_IF_INCLUDE_DEPENDS})
+  find_package(${Dependency} REQUIRED)
+endforeach()
+foreach(Dependency IN ITEMS ${NODE_INCLUDE_DEPENDS})
+  find_package(${Dependency} REQUIRED)
+endforeach()
+
+# Use pkg-config to find libserial
+pkg_check_modules(PC_SERIAL REQUIRED IMPORTED_TARGET libserial)
+
+## COMPILE
+# Build the reusable serial communicator library
+add_library(serial_communicator_lib SHARED src/serial_communicator.cpp)
+target_compile_features(serial_communicator_lib PUBLIC cxx_std_17)
+target_include_directories(serial_communicator_lib PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include/alicia_d_driver>
+  ${PC_SERIAL_INCLUDE_DIRS}
+)
+ament_target_dependencies(serial_communicator_lib PUBLIC
+  rclcpp
+  std_msgs
+  sensor_msgs
+)
+target_link_libraries(serial_communicator_lib PUBLIC
   PkgConfig::PC_SERIAL
 )
 
-# # 5. Build the ros2_control hardware interface as a SHARED LIBRARY
-# add_library(alicia_hardware_interface SHARED src/alicia_hardware_interface.cpp)
-# target_include_directories(alicia_hardware_interface PUBLIC
-#   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-#   $<INSTALL_INTERFACE:include>
-# )
-# ament_target_dependencies(alicia_hardware_interface
-#   hardware_interface
-#   pluginlib
-#   rclcpp
-#   rclcpp_lifecycle
-#   std_msgs
-#   sensor_msgs
-#   serial_driver
-# )
-# target_link_libraries(alicia_hardware_interface
-#   serial_communicator_lib
-# )
+# Build the ros2_control hardware interface as a SHARED LIBRARY
+add_library(alicia_d_hardware_interface SHARED src/alicia_d_hardware_interface.cpp)
+target_compile_features(alicia_d_hardware_interface PUBLIC cxx_std_17)
+target_include_directories(alicia_d_hardware_interface PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include/alicia_d_driver>
+)
+ament_target_dependencies(alicia_d_hardware_interface PUBLIC
+  ${HW_IF_INCLUDE_DEPENDS}
+)
+target_link_libraries(alicia_d_hardware_interface PUBLIC
+  serial_communicator_lib
+)
 
-# 6. Build the node executable
+# Build the standalone node executable
 add_executable(alicia_d_driver_node src/alicia_d_driver_node.cpp)
+target_compile_features(alicia_d_driver_node PUBLIC cxx_std_17)
 target_include_directories(alicia_d_driver_node PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  $<INSTALL_INTERFACE:include>
+  $<INSTALL_INTERFACE:include/alicia_d_driver>
 )
-ament_target_dependencies(alicia_d_driver_node
-  rclcpp
-  std_msgs
-  sensor_msgs
-  serial_driver
+ament_target_dependencies(alicia_d_driver_node PUBLIC
+  ${NODE_INCLUDE_DEPENDS}
 )
-target_link_libraries(alicia_d_driver_node
+target_link_libraries(alicia_d_driver_node PUBLIC
   serial_communicator_lib
 )
 
-# No rosidl target interfaces
+# Export hardware plugins
+pluginlib_export_plugin_description_file(hardware_interface alicia_d_driver.xml)
 
-# 8. Install targets and resources
-install(TARGETS
-  alicia_d_driver_node
-  # alicia_hardware_interface
-  serial_communicator_lib
-  ARCHIVE DESTINATION lib
-  LIBRARY DESTINATION lib
-  RUNTIME DESTINATION lib/${PROJECT_NAME}
+## INSTALL
+install(
+  DIRECTORY include/
+  DESTINATION include/alicia_d_driver
 )
-install(DIRECTORY include/
-  DESTINATION include
-)
-install(FILES alicia_d_driver.xml
+
+install(
+  DIRECTORY launch/
   DESTINATION share/${PROJECT_NAME}
 )
-install(DIRECTORY launch
-  DESTINATION share/${PROJECT_NAME}/
+
+install(
+  FILES alicia_d_driver.xml
+  DESTINATION share/${PROJECT_NAME}
 )
-# No msg directory to install
 
-# pluginlib_export_plugin_description_file(hardware_interface alicia_d_driver.xml)
+install(
+  TARGETS alicia_d_driver_node
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
+)
 
+install(
+  TARGETS alicia_d_hardware_interface serial_communicator_lib
+  EXPORT export_alicia_d_driver
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION bin
+)
+
+## EXPORTS
+ament_export_targets(export_alicia_d_driver HAS_LIBRARY_TARGET)
+ament_export_dependencies(${HW_IF_INCLUDE_DEPENDS} ${NODE_INCLUDE_DEPENDS})
 ament_package()

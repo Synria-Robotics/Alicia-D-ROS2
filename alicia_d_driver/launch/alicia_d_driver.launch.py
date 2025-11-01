@@ -11,7 +11,7 @@ def generate_launch_description():
         output='screen',
         emulate_tty=True,
         parameters=[
-            {'port': '/dev/ttyCH343USB0'},
+            {'port': '/dev/ttyCH341USB0'},
             {'baud_rate': 1000000},
             {'debug_mode': True},
             {'servo_count': 9},
