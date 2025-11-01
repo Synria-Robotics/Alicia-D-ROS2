@@ -5,7 +5,8 @@ from moveit_configs_utils import MoveItConfigsBuilder
 
 
 def get_versioned_moveit_config(robot_version='v5_6', gripper_type='50mm', 
-                                port='/dev/ttyUSB0', baud_rate='1000000'):
+                                port='/dev/ttyUSB0', baud_rate='1000000',
+                                firmware_version='auto'):
     """
     Build MoveIt configuration for specified robot version and gripper type.
     
@@ -14,6 +15,7 @@ def get_versioned_moveit_config(robot_version='v5_6', gripper_type='50mm',
         gripper_type: Gripper type (50mm, 100mm)
         port: Serial port for hardware interface
         baud_rate: Baud rate for serial communication
+        firmware_version: Firmware version (e.g., "5.0.0", "6.0.0", or "auto" for auto-detection)
     
     Returns:
         MoveItConfigs object
@@ -39,7 +41,7 @@ def get_versioned_moveit_config(robot_version='v5_6', gripper_type='50mm',
         'hw_port': port,
         'hw_baud_rate': baud_rate,
         'hw_gripper_type': gripper_type,
-        'hw_firmware_version': 'auto',
+        'hw_firmware_version': firmware_version,
         'hw_default_speed_rad_s': '0.349',
     }
     

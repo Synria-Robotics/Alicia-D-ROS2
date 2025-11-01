@@ -19,12 +19,14 @@ def launch_setup(context, *args, **kwargs):
     gripper_type = LaunchConfiguration('gripper_type').perform(context)
     port = LaunchConfiguration('port').perform(context)
     baud_rate = LaunchConfiguration('baud_rate').perform(context)
+    firmware_version = LaunchConfiguration('firmware_version').perform(context)
     
     print(f'\033[1;32m[INFO] Launching real robot with version: {robot_version}, gripper: {gripper_type}\033[0m')
     print(f'\033[1;32m[INFO] Serial port: {port}, baud rate: {baud_rate}\033[0m')
+    print(f'\033[1;32m[INFO] Firmware version: {firmware_version}\033[0m')
     
     # Get versioned MoveIt config with hardware parameters
-    moveit_config = get_versioned_moveit_config(robot_version, gripper_type, port, baud_rate)
+    moveit_config = get_versioned_moveit_config(robot_version, gripper_type, port, baud_rate, firmware_version)
     
     # Update robot description with hardware interface parameters
     robot_description = moveit_config.robot_description
@@ -176,6 +178,11 @@ def generate_launch_description():
             'baud_rate',
             default_value='1000000',
             description='Baud rate for serial communication'
+        ),
+        DeclareLaunchArgument(
+            'firmware_version',
+            default_value='auto',
+            description='Firmware version (e.g., "5.0.0", "6.0.0", or "auto" for auto-detection)'
         ),
         OpaqueFunction(function=launch_setup)
     ])

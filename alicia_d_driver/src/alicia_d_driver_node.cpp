@@ -335,13 +335,32 @@ void AliciaDDriverNode::process_serial_data()
             continue;
         }
 
-        // The first byte of the payload is the command ID
-        uint8_t command_id = packet[0];
-
-        // Create a sub-vector that contains the actual data payload for the command
+        // Full frame format: AA CMD LEN DATA... CHK FF
+        // packet[0] = AA (frame header)
+        // packet[1] = CMD (command ID)
+        // packet[2] = LEN (data length)
+        // packet[3..2+LEN] = DATA (payload)
+        // packet[3+LEN] = CHK (checksum)
+        // packet[3+LEN+1] = FF (end byte)
+        
+        if (packet.size() < 4 || packet[0] != 0xAA) {
+            RCLCPP_WARN(this->get_logger(), "Invalid frame: expected AA header, got size=%zu, first_byte=0x%02X", 
+                       packet.size(), packet.size() > 0 ? packet[0] : 0);
+            continue;
+        }
+        
+        uint8_t command_id = packet[1];  // Command is at index 1 (after AA)
+        
+        // Extract data payload: includes LEN byte to match parse function expectations
+        // Parse functions expect: LEN DATA...
         std::vector<uint8_t> data_payload;
-        if (packet.size() > 1) {
-            data_payload.assign(packet.begin() + 1, packet.end());
+        if (packet.size() >= 4) {
+            uint8_t data_len = packet[2];
+            if (packet.size() >= (size_t)3 + data_len + 2)  // AA CMD LEN DATA CHK FF
+            {
+                // Payload includes LEN byte: from index 2 (LEN) to index 3+LEN (before checksum)
+                data_payload.assign(packet.begin() + 2, packet.begin() + 3 + data_len);
+            }
         }
 
         switch (command_id) {
