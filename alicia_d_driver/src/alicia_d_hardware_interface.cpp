@@ -57,7 +57,9 @@ CallbackReturn AliciaDHardwareInterface::on_init(
   // Initialize timing for rate limiting
   last_sent_positions_.resize(info_.joints.size() - 1, 0.0);  // -1 for gripper
   last_sent_gripper_ = -1.0;  // Initialize to invalid value to force first send
+  last_command_gripper_ = -1.0;  // Initialize to invalid value
   last_write_time_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+  last_gripper_send_time_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
   command_change_threshold_ = 0.0001;  // Unused now, kept for compatibility
   min_write_period_ = 0.020;            // 20ms = 50Hz (matches Python SDK HardwareExecutor delay)
   min_write_period_idle_ = 0.010;      // Unused now
@@ -343,14 +345,53 @@ return_type AliciaDHardwareInterface::write(
     // URDF stroke_m (closed) -> gripper_value 0 (closed)
     double gripper_value = 100.0 - ((stroke_m > 1e-6 ? m / stroke_m : 0.0) * 100.0);
 
-    // Only send gripper command if value changed significantly (threshold: 0.5%)
+    // Detect trajectory start: large change OR pause indicates new trajectory
+    // This ensures waypoints in new trajectories are not skipped even if close to previous end position
+    const double trajectory_start_threshold = 2.0;  // 2% of range indicates new trajectory
+    const double trajectory_pause_threshold_sec = 0.1;  // 100ms pause indicates new trajectory
+    bool is_new_trajectory = false;
+    
+    if (last_command_gripper_ >= 0.0)  // Valid previous command
+    {
+      double change_from_last_cmd = std::abs(gripper_value - last_command_gripper_);
+      
+      // Large jump (>= 2%) between consecutive commands indicates a new trajectory has started
+      if (change_from_last_cmd >= trajectory_start_threshold)
+      {
+        is_new_trajectory = true;
+      }
+      // If no gripper command sent for a while (>100ms), likely a new trajectory started
+      else if (last_gripper_send_time_.seconds() > 0.0)
+      {
+        double time_since_last_send = (time - last_gripper_send_time_).seconds();
+        if (time_since_last_send >= trajectory_pause_threshold_sec)
+        {
+          is_new_trajectory = true;
+        }
+      }
+      
+      if (is_new_trajectory)
+      {
+        // Reset last_sent_gripper_ to force sending all waypoints in new trajectory
+        last_sent_gripper_ = -1.0;
+      }
+    }
+    
+    // Update last commanded value
+    last_command_gripper_ = gripper_value;
+
+    // Only send gripper command if value changed significantly (threshold: 0.001 = 0.1%)
     // or if this is the first command (last_sent_gripper_ is invalid)
+    // or if it's a new trajectory start
     const double gripper_threshold = 0.001;  
-    bool gripper_changed = std::abs(gripper_value - last_sent_gripper_) >= gripper_threshold;
+    bool gripper_changed = (last_sent_gripper_ < 0.0) ||  // First send
+                           is_new_trajectory ||           // New trajectory start
+                           (std::abs(gripper_value - last_sent_gripper_) >= gripper_threshold);
     if (gripper_changed)
     {
-      // Update last sent value
+      // Update last sent value and timestamp
       last_sent_gripper_ = gripper_value;
+      last_gripper_send_time_ = time;
 
       if (firmware_new_)
       {
@@ -383,16 +424,7 @@ return_type AliciaDHardwareInterface::write(
         gripper_frame[6] = calculate_checksum(gripper_frame);
         gripper_frame[7] = FRAME_END_BYTE;
         
-        // Print V5 gripper frame
-        std::string hex_string = "gripper frame (V5):";
-        for (size_t i = 0; i < gripper_frame.size(); i++)
-        {
-          char hex_byte[8];
-          snprintf(hex_byte, sizeof(hex_byte), " %02X", gripper_frame[i]);
-          hex_string += hex_byte;
-        }
-        RCLCPP_INFO(rclcpp::get_logger("AliciaDHardwareInterface"), "%s", hex_string.c_str());
-        
+
         communicator_->write_raw_frame(gripper_frame);
       }
     }

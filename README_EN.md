@@ -144,6 +144,13 @@ ros2 launch alicia_d_driver alicia_d_driver.launch.py \
 
 ## Special Commands
 
+Running the following command:
+```
+ros2 launch alicia_d_driver alicia_d_driver.launch.py port:=/dev/ttyUSB0 gripper_type:=100mm firmware_version:=6.0.0
+```
+
+
+
 ### Enable Hand-Guiding Mode (Zero Torque)
 
 ```bash

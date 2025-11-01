@@ -84,7 +84,9 @@ private:
   // Command change detection (ROS1-style: only send on change)
   std::vector<double> last_sent_positions_;
   double last_sent_gripper_;
+  double last_command_gripper_;  // Track last commanded value to detect trajectory starts
   rclcpp::Time last_write_time_;
+  rclcpp::Time last_gripper_send_time_;  // Track when gripper command was last sent
   double command_change_threshold_;  // Minimum change to trigger command send
   double min_write_period_;          // Minimum time between writes during motion (500Hz)
   double min_write_period_idle_;      // Minimum time between writes when idle (100Hz)

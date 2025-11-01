@@ -147,6 +147,11 @@ ros2 launch alicia_d_driver alicia_d_driver.launch.py \
 
 ## 特殊命令
 
+启动独立驱动:
+```
+ros2 launch alicia_d_driver alicia_d_driver.launch.py port:=/dev/ttyUSB0 gripper_type:=100mm firmware_version:=6.0.0
+```
+
 ### 使能手引导模式（零力矩）
 
 ```bash
