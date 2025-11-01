@@ -1,7 +1,7 @@
 # This config file is used by ros2_control
 controller_manager:
   ros__parameters:
-    update_rate: 500  # Hz
+    update_rate: 200  # Hz
 
     Alicia_controller:
       type: joint_trajectory_controller/JointTrajectoryController
@@ -27,6 +27,21 @@ Alicia_controller:
       - position
     state_interfaces:
       - position
+    
+    # Trajectory interpolation settings for smooth motion
+    state_publish_rate: 200.0  # Publish state at controller update rate
+    action_monitor_rate: 20.0   # Monitor action goal progress
+    
+    # Open loop control - rely on trajectory interpolation, not feedback
+    open_loop_control: true
+    
+    # Allow trajectory controller to interpolate between points
+    allow_integration_in_goal_trajectories: true
+    
+    # Constraints for trajectory execution
+    constraints:
+      stopped_velocity_tolerance: 0.01  # Velocity threshold to consider stopped
+      goal_time: 0.0  # Start trajectory immediately (0 = now)
 Gripper_controller:
   ros__parameters:
     joints:

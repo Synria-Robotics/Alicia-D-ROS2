@@ -1,9 +1,10 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
     <xacro:macro name="alicia_d_descriptions_ros2_control" params="name initial_positions_file 
-                 hw_port:=/dev/ttyCH341USB0 hw_baud_rate:=1000000 
+                 hw_port:=/dev/ttyUSB0 hw_baud_rate:=1000000 
                  hw_debug_mode:=false hw_servo_count:=9 
-                 hw_gripper_type:=50mm hw_firmware_version:=auto">
+                 hw_gripper_type:=50mm hw_firmware_version:=auto 
+                 hw_default_speed_rad_s:=0.349">
         <xacro:property name="initial_positions" value="${xacro.load_yaml(initial_positions_file)['initial_positions']}"/>
 
         <ros2_control name="${name}" type="system">
@@ -15,6 +16,7 @@
                 <param name="servo_count">${hw_servo_count}</param>
                 <param name="gripper_type">${hw_gripper_type}</param>
                 <param name="firmware_version">${hw_firmware_version}</param>
+                <param name="default_speed_rad_s">${hw_default_speed_rad_s}</param>
             </hardware>
             <joint name="Joint1">
                 <command_interface name="position"/>

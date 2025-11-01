@@ -169,8 +169,8 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'port',
-            default_value='/dev/ttyCH341USB0',
-            description='Serial port for robot connection'
+            default_value='/dev/ttyUSB0',
+            description='Serial port for robot connection (e.g., /dev/ttyUSB0 or /dev/ttyCH341USB0)'
         ),
         DeclareLaunchArgument(
             'baud_rate',

@@ -3,7 +3,7 @@
 moveit_controller_manager: moveit_simple_controller_manager/MoveItSimpleControllerManager
 
 moveit_simple_controller_manager:
-  update_rate: 500
+  update_rate: 200
   controller_names:
     - Alicia_controller
     - Gripper_controller

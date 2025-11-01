@@ -78,6 +78,9 @@ private:
   rclcpp::Time last_state_query_time_;
   double state_query_period_sec_;
   
+  // Speed control (for V6+ firmware)
+  double default_speed_rad_s_;  // Default speed in rad/s (~20 deg/s = 0.349 rad/s)
+  
   // Command change detection (ROS1-style: only send on change)
   std::vector<double> last_sent_positions_;
   double last_sent_gripper_;
@@ -92,9 +95,10 @@ private:
   void parse_servo_states_frame(const std::vector<uint8_t>& data_payload);
   void parse_gripper_state_frame(const std::vector<uint8_t>& data_payload);
   void parse_error_frame(const std::vector<uint8_t>& payload);
-  void parse_version_frame(const std::vector<uint8_t>& data_payload);
+  void parse_version_frame(const std::vector<uint8_t>& full_frame);
   void send_firmware_query();
   void send_state_query();
+  void set_speed(double speed_rad_s);
   
   uint16_t rad_to_hardware_value(double angle_rad);
   uint16_t rad_to_hardware_value_grip(double angle_deg);
@@ -110,6 +114,7 @@ private:
   static constexpr uint8_t CMD_GRIPPER_CONTROL = 0x02;
   static constexpr uint8_t CMD_ZERO_CAL = 0x03;
   static constexpr uint8_t CMD_DEMO_CONTROL = 0x13;
+  static constexpr uint8_t CMD_SPEED = 0x05;
   static constexpr uint8_t CMD_VERSION_QUERY = 0x0A;
   static constexpr uint8_t FEEDBACK_GRIPPER_STATE = 0x02;
   static constexpr uint8_t FEEDBACK_SERVO_STATE = 0x04;

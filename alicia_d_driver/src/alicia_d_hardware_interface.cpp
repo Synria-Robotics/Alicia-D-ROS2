@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <string>
 #include <vector>
+#include <chrono>
+#include <thread>
 
 namespace alicia_d_driver
 {
@@ -28,6 +30,10 @@ CallbackReturn AliciaDHardwareInterface::on_init(
                   info_.hardware_parameters["gripper_type"] : "50mm";
   firmware_version_ = info_.hardware_parameters.count("firmware_version") ? 
                       info_.hardware_parameters["firmware_version"] : "auto";
+  
+  // Speed control parameter (for V6+ firmware, default ~20 deg/s = 0.349 rad/s)
+  default_speed_rad_s_ = info_.hardware_parameters.count("default_speed_rad_s") ? 
+                         std::stod(info_.hardware_parameters["default_speed_rad_s"]) : 0.349;
 
   // Initialize state and command vectors
   hw_positions_state_.resize(info_.joints.size(), 0.0);
@@ -48,20 +54,20 @@ CallbackReturn AliciaDHardwareInterface::on_init(
   state_query_period_sec_ = 0.02;
   last_state_query_time_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
 
-  // Initialize ROS1-style command change detection
+  // Initialize timing for rate limiting
   last_sent_positions_.resize(info_.joints.size() - 1, 0.0);  // -1 for gripper
-  last_sent_gripper_ = 0.0;
+  last_sent_gripper_ = -1.0;  // Initialize to invalid value to force first send
   last_write_time_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
-  command_change_threshold_ = 0.0001;  // 0.0001 rad (~0.006 deg) - very sensitive for smooth trajectory execution
-  min_write_period_ = 0.0002;           // 2ms = 500Hz max during motion (matches ros2_control rate)
-  min_write_period_idle_ = 0.010;     // 10ms = 100Hz when idle (prevents unnecessary writes when stationary)
+  command_change_threshold_ = 0.0001;  // Unused now, kept for compatibility
+  min_write_period_ = 0.020;            // 20ms = 50Hz (matches Python SDK HardwareExecutor delay)
+  min_write_period_idle_ = 0.010;      // Unused now
   has_sent_initial_command_ = false;
 
   RCLCPP_INFO(rclcpp::get_logger("AliciaDHardwareInterface"), 
-              "Initialized hardware interface (ROS1-style: send commands only on change)");
+              "Initialized hardware interface (rate-limited command sending)");
   RCLCPP_INFO(rclcpp::get_logger("AliciaDHardwareInterface"), 
-              "Port: %s, Baud: %d, Change threshold: %.4f rad", 
-              port_.c_str(), baud_rate_, command_change_threshold_);
+              "Port: %s, Baud: %d, Command rate limit: %.0f Hz (matches Python SDK)", 
+              port_.c_str(), baud_rate_, 1.0 / min_write_period_);
 
   return CallbackReturn::SUCCESS;
 }
@@ -119,9 +125,7 @@ CallbackReturn AliciaDHardwareInterface::on_activate(
   RCLCPP_INFO(rclcpp::get_logger("AliciaDHardwareInterface"), 
               "Connected to robot. Enabling full torque mode.");
 
-  // Enable full torque mode
-  auto frame = generate_simple_frame(CMD_DEMO_CONTROL, 0x01, true);
-  communicator_->write_raw_frame(frame);
+
 
   // Query firmware version if needed
   if (firmware_version_.empty() || firmware_version_ == "auto")
@@ -129,11 +133,67 @@ CallbackReturn AliciaDHardwareInterface::on_activate(
     RCLCPP_INFO(rclcpp::get_logger("AliciaDHardwareInterface"), 
                 "Firmware version not specified, attempting auto-detection...");
     send_firmware_query();
+    // Wait and process responses to get firmware version
+    // Try multiple times as robot may need time to respond
+    for (int i = 0; i < 40 && !firmware_version_detected_; ++i)  // Wait up to 2 seconds
+    {
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      process_serial_data();  // Process any incoming firmware version response
+    }
+    
+    // If still not detected, try sending query again
+    if (!firmware_version_detected_)
+    {
+      RCLCPP_INFO(rclcpp::get_logger("AliciaDHardwareInterface"), 
+                  "First query timeout, sending version query again...");
+      send_firmware_query();
+      for (int i = 0; i < 20 && !firmware_version_detected_; ++i)  // Wait another 1 second
+      {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        process_serial_data();
+      }
+    }
   }
   else
   {
     firmware_version_detected_ = true;
-    firmware_new_ = (!firmware_version_.empty() && firmware_version_[0] >= '6');
+    // Parse version string to determine if V6+
+    // Version format: "X.Y.Z" where X is major version
+    if (!firmware_version_.empty() && firmware_version_[0] >= '6')
+    {
+      firmware_new_ = true;
+    }
+    else
+    {
+      firmware_new_ = false;
+    }
+    RCLCPP_INFO(rclcpp::get_logger("AliciaDHardwareInterface"), 
+                "Using specified firmware version: %s (V6+=%s)", 
+                firmware_version_.c_str(), firmware_new_ ? "true" : "false");
+  }
+
+  // Set speed for V6+ firmware (critical for smooth motion!)
+  if (firmware_new_)
+  {
+    RCLCPP_INFO(rclcpp::get_logger("AliciaDHardwareInterface"), 
+                "V6+ firmware detected, setting speed: %.1f deg/s (%.3f rad/s)", 
+                default_speed_rad_s_ * 180.0 / M_PI, default_speed_rad_s_);
+    set_speed(default_speed_rad_s_);
+  }
+  else if (firmware_version_detected_)
+  {
+    RCLCPP_INFO(rclcpp::get_logger("AliciaDHardwareInterface"), 
+                "V5 firmware detected, speed control not available");
+  }
+  else
+  {
+    RCLCPP_WARN(rclcpp::get_logger("AliciaDHardwareInterface"), 
+                "Firmware version not detected. Defaulting to V5 behavior (no speed control).");
+    RCLCPP_WARN(rclcpp::get_logger("AliciaDHardwareInterface"), 
+                "If this is incorrect, specify firmware_version parameter explicitly.");
+    // Default to V5 (older firmware) if detection fails
+    firmware_new_ = false;
+    // Do NOT set speed for V5 firmware
   }
 
   // Initialize command to current state
@@ -167,22 +227,19 @@ return_type AliciaDHardwareInterface::read(
   // Process incoming serial data - updates hw_positions_state_ when robot sends feedback
   process_serial_data();
   
-  // ROS1-style heartbeat: Always have valid state data
-  // hw_positions_state_ is updated by process_serial_data() when robot sends feedback
-  // If no new data, we still publish last known state (this is what makes RViz update smoothly)
-  
+
   static int read_count = 0;
   static int last_packet_count = 0;
   read_count++;
   
-  // Periodic logging to monitor communication
+  // Periodic logging to monitor communication (DEBUG level only)
   if (read_count % 5000 == 0)
   {
     extern int g_total_packets_received;
     if (g_total_packets_received > last_packet_count)
     {
       int new_packets = g_total_packets_received - last_packet_count;
-      RCLCPP_INFO(rclcpp::get_logger("AliciaDHardwareInterface"), 
+      RCLCPP_DEBUG(rclcpp::get_logger("AliciaDHardwareInterface"), 
                   "Robot responding: %d packets/sec | J1=%.3f rad", 
                   new_packets, hw_positions_state_.size() > 0 ? hw_positions_state_[0] : 0.0);
       last_packet_count = g_total_packets_received;
@@ -201,91 +258,45 @@ return_type AliciaDHardwareInterface::read(
 }
 
 return_type AliciaDHardwareInterface::write(
-  const rclcpp::Time & time, const rclcpp::Duration & /*period*/)
+  const rclcpp::Time & time, const rclcpp::Duration & period)
 {
   if (!communicator_ || !communicator_->is_connected())
   {
     return return_type::ERROR;
   }
 
-  // For SMOOTH trajectory execution: Send ALL commands during motion at full 500Hz rate
-  // ros2_control calls write() at 500Hz - we must send every command for smooth motion
-  
   std::lock_guard<std::mutex> lock(data_mutex_);
   
-  // Check if command has changed (use extremely sensitive threshold to catch all changes)
-  bool command_changed = !has_sent_initial_command_;  // Always send first command
-  bool has_any_change = false;
-  
-  // Check all joints (including gripper) for ANY change
-  for (size_t i = 0; i < hw_positions_command_.size(); ++i)
+  // Rate limit command sending to match Python SDK behavior (50Hz = 20ms)
+  double elapsed = (time - last_write_time_).seconds();
+  if (elapsed < min_write_period_)
   {
-    double current_val = hw_positions_command_[i];
-    double last_val = (i < last_sent_positions_.size()) ? last_sent_positions_[i] : 
-                      ((i == 6) ? last_sent_gripper_ : 0.0);  // Gripper uses separate variable
-    
-    double diff = std::abs(current_val - last_val);
-    // Extremely sensitive: catch ANY numeric difference (even floating point precision changes)
-    if (diff > 1e-9)
-    {
-      command_changed = true;
-      has_any_change = true;
-      break;  // Found a change, no need to check others
-    }
-  }
-
-  // During active motion: send at full ros2_control rate (500Hz = 2ms period)
-  // During idle: only send if changed and enough time passed
-  if (has_any_change)
-  {
-    // Active motion detected - send immediately (only respect hardware min period of 2ms)
-    if ((time - last_write_time_).seconds() < min_write_period_)
-    {
-      return return_type::OK;  // Hardware serial rate limit (500Hz max)
-    }
-  }
-  else
-  {
-    // No change detected - idle mode
-    if (has_sent_initial_command_)
-    {
-      // Check if enough time has passed for idle check
-      if ((time - last_write_time_).seconds() < min_write_period_idle_)
-      {
-        return return_type::OK;
-      }
-      // Still no change after idle period - skip
-      return return_type::OK;
-    }
-    // Haven't sent initial command yet - send it
-  }
-
-  // Command HAS changed or initial command - send it!
-  static int write_count = 0;
-  write_count++;
-  
-  if (write_count % 100 == 0 || !has_sent_initial_command_)  // Log first and every 50 commands during motion
-  {
-    RCLCPP_INFO(rclcpp::get_logger("AliciaDHardwareInterface"), 
-                "Sending command to robot (total: %d, motion: %s)", 
-                write_count, has_any_change ? "yes" : "no");
-  }
-  
-  // Update last sent values (lock already held from above)
-  // Update joint positions
-  for (size_t i = 0; i < hw_positions_command_.size() && i < last_sent_positions_.size(); ++i)
-  {
-    last_sent_positions_[i] = hw_positions_command_[i];
-  }
-  
-  // Update gripper if present
-  if (hw_positions_command_.size() > 6)
-  {
-    last_sent_gripper_ = hw_positions_command_[6];
+    return return_type::OK;  // Skip this write, rate limit to 50Hz
   }
   
   last_write_time_ = time;
-  has_sent_initial_command_ = true;
+  
+  static int write_count = 0;
+  static rclcpp::Time last_log_time = rclcpp::Time(0, 0, RCL_ROS_TIME);
+  write_count++;
+  
+  // Initialize on first call
+  if (last_log_time.seconds() == 0.0) {
+    last_log_time = time;
+  }
+  
+  // Log frequency and command values periodically (DEBUG level only)
+  double time_since_log = (time - last_log_time).seconds();
+  if (time_since_log >= 1.0)  // Every second
+  {
+    double actual_rate = write_count / time_since_log;
+    RCLCPP_DEBUG(rclcpp::get_logger("AliciaDHardwareInterface"), 
+                "Write rate: %.1f Hz (expected: %.1f Hz), Commands sent: %d | J1=%.3f rad", 
+                actual_rate, 1.0 / period.seconds(), write_count,
+                hw_positions_command_.size() > 0 ? hw_positions_command_[0] : 0.0);
+    write_count = 0;
+    last_log_time = time;
+  }
 
   // Build and send servo frame
   size_t frame_size = servo_count_ * 2 + 5;
@@ -315,18 +326,34 @@ return_type AliciaDHardwareInterface::write(
 
   servo_frame[frame_size - 2] = calculate_checksum(servo_frame);
   servo_frame[frame_size - 1] = FRAME_END_BYTE;
+  
   communicator_->write_raw_frame(servo_frame);
 
-  // Build and send gripper frame (if gripper joint exists)
+  // Build and send gripper frame (if gripper joint exists) - only on change
   if (hw_positions_command_.size() > 6)
   {
-    // Convert gripper position (meters) to hardware value (0-100 degrees)
+    // Convert gripper position (meters) to 0-100 value
+    // Matching ROS1 driver node: URDF 0 = open, URDF stroke_m = closed
+    // Python SDK: 0 = closed, 100 = open
+    // Conversion: URDF meters -> 0-100 value (0=closed, 100=open)
     const double stroke_m = (gripper_type_ == "100mm") ? 0.05 : 0.025;
     double m = std::max(0.0, std::min(stroke_m, hw_positions_command_[6]));
+    // ROS1 formula: gripper_value = 100 - (m / stroke_m * 100)
+    // URDF 0 (open) -> gripper_value 100 (open)
+    // URDF stroke_m (closed) -> gripper_value 0 (closed)
     double gripper_value = 100.0 - ((stroke_m > 1e-6 ? m / stroke_m : 0.0) * 100.0);
 
-    if (firmware_new_)
+    // Only send gripper command if value changed significantly (threshold: 0.5%)
+    // or if this is the first command (last_sent_gripper_ is invalid)
+    const double gripper_threshold = 0.001;  
+    bool gripper_changed = std::abs(gripper_value - last_sent_gripper_) >= gripper_threshold;
+    if (gripper_changed)
     {
+      // Update last sent value
+      last_sent_gripper_ = gripper_value;
+
+      if (firmware_new_)
+      {
       std::vector<uint8_t> gripper_frame(11);
       gripper_frame[0] = FRAME_START_BYTE;
       gripper_frame[1] = CMD_GRIPPER_CONTROL;
@@ -340,22 +367,36 @@ return_type AliciaDHardwareInterface::write(
       gripper_frame[8] = 254;
       gripper_frame[9] = calculate_checksum(gripper_frame);
       gripper_frame[10] = FRAME_END_BYTE;
+      
       communicator_->write_raw_frame(gripper_frame);
+      }
+      else
+      {
+        std::vector<uint8_t> gripper_frame(8);
+        gripper_frame[0] = FRAME_START_BYTE;
+        gripper_frame[1] = CMD_GRIPPER_CONTROL;
+        gripper_frame[2] = 3;
+        gripper_frame[3] = 1;
+        uint16_t target = rad_to_hardware_value_grip(gripper_value);
+        gripper_frame[4] = target & 0xFF;
+        gripper_frame[5] = (target >> 8) & 0xFF;
+        gripper_frame[6] = calculate_checksum(gripper_frame);
+        gripper_frame[7] = FRAME_END_BYTE;
+        
+        // Print V5 gripper frame
+        std::string hex_string = "gripper frame (V5):";
+        for (size_t i = 0; i < gripper_frame.size(); i++)
+        {
+          char hex_byte[8];
+          snprintf(hex_byte, sizeof(hex_byte), " %02X", gripper_frame[i]);
+          hex_string += hex_byte;
+        }
+        RCLCPP_INFO(rclcpp::get_logger("AliciaDHardwareInterface"), "%s", hex_string.c_str());
+        
+        communicator_->write_raw_frame(gripper_frame);
+      }
     }
-    else
-    {
-      std::vector<uint8_t> gripper_frame(8);
-      gripper_frame[0] = FRAME_START_BYTE;
-      gripper_frame[1] = CMD_GRIPPER_CONTROL;
-      gripper_frame[2] = 3;
-      gripper_frame[3] = 1;
-      uint16_t target = rad_to_hardware_value_grip(gripper_value);
-      gripper_frame[4] = target & 0xFF;
-      gripper_frame[5] = (target >> 8) & 0xFF;
-      gripper_frame[6] = calculate_checksum(gripper_frame);
-      gripper_frame[7] = FRAME_END_BYTE;
-      communicator_->write_raw_frame(gripper_frame);
-    }
+
   }
 
   return return_type::OK;
@@ -384,22 +425,38 @@ void AliciaDHardwareInterface::process_serial_data()
     packet_count++;
     g_total_packets_received++;
     
-    // The first byte of the payload is the command ID
-    uint8_t command_id = packet[0];
+    // Full frame format: AA CMD LEN DATA... CHK FF
+    // packet[0] = AA, packet[1] = CMD, packet[2] = LEN
+    if (packet.empty() || packet[0] != FRAME_START_BYTE)
+    {
+      RCLCPP_WARN(rclcpp::get_logger("AliciaDHardwareInterface"), 
+                  "Invalid packet: missing frame start byte");
+      continue;
+    }
+    
+    uint8_t command_id = packet[1];  // Command is at index 1 (after AA)
+    
 
-    // Log periodically for debugging
+
     if (packet_count % 100 == 0)
     {
-      RCLCPP_INFO(rclcpp::get_logger("AliciaDHardwareInterface"), 
+      RCLCPP_DEBUG(rclcpp::get_logger("AliciaDHardwareInterface"), 
                   "Packets: total=%d, servo=%d, gripper=%d, unknown=%d", 
                   packet_count, servo_count_received, gripper_count_received, unknown_count);
     }
 
-    // Create a sub-vector that contains the actual data payload for the command
+    // Extract data payload: includes LEN byte to match parse function expectations
+    // Frame format: AA CMD LEN DATA... CHK FF
+    // Parse functions expect: LEN DATA...
     std::vector<uint8_t> data_payload;
-    if (packet.size() > 1)
+    if (packet.size() >= 4)
     {
-      data_payload.assign(packet.begin() + 1, packet.end());
+      uint8_t data_len = packet[2];
+      if (packet.size() >= (size_t)3 + data_len + 2)  // AA CMD LEN DATA CHK FF
+      {
+        // Payload includes LEN byte: from index 2 (LEN) to index 2+LEN (before checksum)
+        data_payload.assign(packet.begin() + 2, packet.begin() + 3 + data_len);
+      }
     }
 
     switch (command_id)
@@ -418,7 +475,7 @@ void AliciaDHardwareInterface::process_serial_data()
         parse_error_frame(data_payload);
         break;
       case FEEDBACK_VERSION:
-        parse_version_frame(data_payload);
+        parse_version_frame(packet);  
         break;
       default:
         unknown_count++;
@@ -455,7 +512,7 @@ void AliciaDHardwareInterface::parse_servo_states_frame(const std::vector<uint8_
   parse_count++;
   if (parse_count % 50 == 0)  // Log every 50 frames (~1 second at 50Hz)
   {
-    RCLCPP_INFO(rclcpp::get_logger("AliciaDHardwareInterface"), 
+    RCLCPP_DEBUG(rclcpp::get_logger("AliciaDHardwareInterface"), 
                 "Receiving servo states: %d servos, J1=%.3f rad", 
                 servos_in_frame, hw_positions_state_.size() > 0 ? hw_positions_state_[0] : 0.0);
   }
@@ -510,14 +567,24 @@ void AliciaDHardwareInterface::parse_error_frame(const std::vector<uint8_t>& pay
                error_type, error_param);
 }
 
-void AliciaDHardwareInterface::parse_version_frame(const std::vector<uint8_t>& data_payload)
+void AliciaDHardwareInterface::parse_version_frame(const std::vector<uint8_t>& full_frame)
 {
   if (firmware_version_detected_) return;
-  if (data_payload.size() < 4) return;
   
-  uint8_t major = data_payload[1];
-  uint8_t minor = data_payload[2];
-  uint8_t patch = data_payload[3];
+  // Full frame format: AA CMD LEN major minor patch ... CHK FF
+  // Python SDK accesses frame[3], frame[4], frame[5] for version
+  // So: frame[0]=AA, frame[1]=CMD, frame[2]=LEN, frame[3]=major, frame[4]=minor, frame[5]=patch
+  if (full_frame.size() < 6) 
+  {
+    RCLCPP_WARN(rclcpp::get_logger("AliciaDHardwareInterface"), 
+                "Version frame too short: %zu bytes (expected at least 6)", full_frame.size());
+    return;
+  }
+  
+  // Extract version from indices 3, 4, 5 (matching Python SDK)
+  uint8_t major = full_frame[3];
+  uint8_t minor = full_frame[4];
+  uint8_t patch = full_frame[5];
   
   char buf[16];
   snprintf(buf, sizeof(buf), "%d.%d.%d", major, minor, patch);
@@ -526,7 +593,7 @@ void AliciaDHardwareInterface::parse_version_frame(const std::vector<uint8_t>& d
   firmware_version_detected_ = true;
   
   RCLCPP_INFO(rclcpp::get_logger("AliciaDHardwareInterface"), 
-              "Firmware version detected: %s (new=%s)", 
+              "Firmware version detected: %s (V6+=%s)", 
               firmware_version_.c_str(), firmware_new_ ? "true" : "false");
 }
 
@@ -534,13 +601,19 @@ void AliciaDHardwareInterface::send_firmware_query()
 {
   if (!communicator_ || !communicator_->is_connected()) return;
   
+  // Version query frame format matching Python SDK: AA 0A 01 00 00 FF
+  // Frame: AA CMD LEN DATA CHK FF
+  // For simple query: LEN=1, DATA=0x00, CHK=0x00 (sum of payload=0, mod 2 = 0)
   std::vector<uint8_t> frame(6);
-  frame[0] = FRAME_START_BYTE;
-  frame[1] = CMD_VERSION_QUERY;
-  frame[2] = 0x01;
-  frame[3] = 0x00;
-  frame[4] = 0x00;
-  frame[5] = FRAME_END_BYTE;
+  frame[0] = FRAME_START_BYTE;  // AA
+  frame[1] = CMD_VERSION_QUERY; // 0x0A
+  frame[2] = 0x01;              // Length = 1
+  frame[3] = 0x00;              // Data byte
+  frame[4] = 0x00;              // Checksum (0x00 mod 2 = 0)
+  frame[5] = FRAME_END_BYTE;    // FF
+  
+  RCLCPP_DEBUG(rclcpp::get_logger("AliciaDHardwareInterface"), 
+               "Sending firmware version query: AA 0A 01 00 00 FF");
   communicator_->write_raw_frame(frame);
 }
 
@@ -561,6 +634,48 @@ void AliciaDHardwareInterface::send_state_query()
   communicator_->write_raw_frame(frame);
 }
 
+void AliciaDHardwareInterface::set_speed(double speed_rad_s)
+{
+  if (!communicator_ || !communicator_->is_connected())
+  {
+    RCLCPP_WARN(rclcpp::get_logger("AliciaDHardwareInterface"), 
+                "Cannot set speed: not connected");
+    return;
+  }
+
+  // Convert rad/s to hardware speed value (1-3400)
+  // Based on Python SDK: max_angle_rad_per_sec = 2*pi, max_speed_value = 3400
+  const double max_angle_rad_per_sec = 2.0 * M_PI;
+  const double max_speed_value = 3400.0;
+  double raw_speed = (speed_rad_s / max_angle_rad_per_sec) * max_speed_value;
+  int speed_value = std::max(1, std::min(3400, static_cast<int>(raw_speed)));
+
+  // Build speed control frame: [START, CMD_SPEED, length, 0x2E, speed_bytes...]
+  // Speed command format: 0x2E + speed value (2 bytes) for each of 10 servos
+  std::vector<uint8_t> frame(26);  // 5 header + 0x2E + 10 servos * 2 bytes = 26
+  frame[0] = FRAME_START_BYTE;
+  frame[1] = CMD_SPEED;
+  frame[2] = 21;  // Data length: 1 (0x2E) + 10 servos * 2 = 21
+  frame[3] = 0x2E;  // Speed control byte
+  
+  // Fill speed value for all 10 servos
+  for (int i = 0; i < 10; ++i)
+  {
+    size_t idx = 4 + i * 2;
+    frame[idx] = speed_value & 0xFF;         // Low byte
+    frame[idx + 1] = (speed_value >> 8) & 0xFF; // High byte
+  }
+  
+  frame[24] = calculate_checksum(frame);
+  frame[25] = FRAME_END_BYTE;
+  
+  communicator_->write_raw_frame(frame);
+  
+  RCLCPP_INFO(rclcpp::get_logger("AliciaDHardwareInterface"), 
+              "Speed set: %.3f rad/s (%.1f deg/s) -> hardware value: %d", 
+              speed_rad_s, speed_rad_s * 180.0 / M_PI, speed_value);
+}
+
 uint16_t AliciaDHardwareInterface::rad_to_hardware_value(double angle_rad)
 {
   double angle_deg = angle_rad * 180.0 / M_PI;
@@ -569,11 +684,23 @@ uint16_t AliciaDHardwareInterface::rad_to_hardware_value(double angle_rad)
   return std::max(0, std::min(4095, value));
 }
 
-uint16_t AliciaDHardwareInterface::rad_to_hardware_value_grip(double angle_deg)
+uint16_t AliciaDHardwareInterface::rad_to_hardware_value_grip(double gripper_value)
 {
-  angle_deg = std::max(0.0, std::min(100.0, angle_deg));
-  int hardware_value = static_cast<int>(angle_deg * 8.52 + 2048.0);
-  return std::max(2048, std::min(2900, hardware_value));
+  // Matching ROS1 driver node exactly
+  // Input range: 0 (closed) to 100 (open)
+  double value = std::max(0.0, std::min(100.0, gripper_value));
+  
+  // Hardware mapping: 
+  // gripper_value=0 (closed) -> gripper_hw_max_ (hardware closed)
+  // gripper_value=100 (open) -> 2048 (hardware open)
+  // This is a REVERSE linear mapping (like Python SDK)
+  constexpr double GRIPPER_HW_MIN = 2048.0;  // Fully open (common for all gripper types)
+  const double gripper_hw_max = (gripper_type_ == "100mm") ? 3600.0 : 3290.0;
+  const double ratio = (gripper_hw_max - GRIPPER_HW_MIN) / 100.0;
+  const double hw_value = gripper_hw_max - (value * ratio);  // Reverse mapping
+  const int hardware_value = static_cast<int>(std::round(hw_value));
+  
+  return std::max(static_cast<int>(GRIPPER_HW_MIN), std::min(static_cast<int>(gripper_hw_max), hardware_value));
 }
 
 double AliciaDHardwareInterface::hardware_value_to_rad(uint16_t hw_value)
@@ -585,12 +712,19 @@ double AliciaDHardwareInterface::hardware_value_to_rad(uint16_t hw_value)
 
 double AliciaDHardwareInterface::hardware_value_to_rad_grip(uint16_t hw_value)
 {
-  hw_value = std::max(2048, std::min(2900, (int)hw_value));
-  double angle_deg = (static_cast<double>(hw_value) - 2048.0) / 8.52;
-  double open_pct = std::max(0.0, std::min(100.0, angle_deg));
+  // Matching ROS1 driver node exactly
+  constexpr double GRIPPER_HW_MIN = 2048.0;  // Fully open (common for all gripper types)
+  const double gripper_hw_max = (gripper_type_ == "100mm") ? 3600.0 : 3290.0;
+  hw_value = std::max(static_cast<int>(GRIPPER_HW_MIN), std::min(static_cast<int>(gripper_hw_max), (int)hw_value));
+  // Inverse map for feedback: gripper_hw_max (closed) -> 0, 2048 (open) -> 100
+  const double ratio = (gripper_hw_max - GRIPPER_HW_MIN) / 100.0;
+  const double gripper_value = 100.0 - ((static_cast<double>(hw_value) - GRIPPER_HW_MIN) / ratio);
+  // Convert to meters for JointState publication
+  // Use gripper type to determine stroke: 100mm -> 0.05m, 50mm -> 0.025m
   const double stroke_m = (gripper_type_ == "100mm") ? 0.05 : 0.025;
-  double meters = (1.0 - (open_pct / 100.0)) * stroke_m;
-  return meters;
+  // Where gripper_value=0 (closed) -> stroke_m, gripper_value=100 (open) -> 0m
+  const double gripper_m = (1.0 - gripper_value / 100.0) * stroke_m;
+  return gripper_m; // Return in meters (prismatic joint)
 }
 
 uint8_t AliciaDHardwareInterface::calculate_checksum(const std::vector<uint8_t>& frame_data)

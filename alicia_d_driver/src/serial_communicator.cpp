@@ -179,15 +179,6 @@ bool SerialCommunicator::write_raw_frame(const std::vector<uint8_t>& frame)
     std::lock_guard<std::mutex> lock(queue_mutex_);
     try {
         serial_port_.Write(frame);
-        try {
-             serial_port_.FlushOutputBuffer();
-             if (debug_mode_) {
-                 RCLCPP_DEBUG(logger_, "Output buffer flushed for port %s.", port_name_.c_str());
-             }
-        } catch (const std::exception& flush_e) {
-            RCLCPP_WARN(logger_, "Exception during flushing output buffer for port %s: %s",
-                        port_name_.c_str(), flush_e.what());
-        }
 
     } catch (const std::exception& e) {
         RCLCPP_ERROR(logger_, "Exception while writing raw frame: %s. Disconnecting.", e.what());
@@ -236,20 +227,36 @@ void SerialCommunicator::read_thread_loop()
                         if (frame_buffer.size() == expected_total_len) {
                             if (validate_checksum(frame_buffer)) {
                                 std::lock_guard<std::mutex> lock(queue_mutex_);
-                                received_packets_queue_.push_back(
-                                    std::vector<uint8_t>(frame_buffer.begin() + 1, frame_buffer.end() - 2)
-                                );
+                                // Store full frame including AA and FF (matching Python SDK behavior)
+                                received_packets_queue_.push_back(frame_buffer);
                                 // print_hex_frame("Recv OK: ", frame_buffer);
                             } else {
+                                // Log failed checksum - might be command 02 frames being rejected
+                                if (frame_buffer.size() >= 2 && frame_buffer[0] == 0xAA) {
+                                    uint8_t cmd = frame_buffer[1];
+                                    RCLCPP_WARN(logger_, "Frame cmd=0x%02X failed checksum validation (size=%zu)", 
+                                                cmd, frame_buffer.size());
+                                }
                                 print_hex_frame("Recv BAD CHECKSUM: ", frame_buffer);
                             }
                             wait_for_start = true; // Reset for the next frame
                         } else if (frame_buffer.size() > expected_total_len) {
+                             // Log bad length - might indicate command 02 frame structure difference
+                             if (frame_buffer.size() >= 2 && frame_buffer[0] == 0xAA) {
+                                 uint8_t cmd = frame_buffer[1];
+                                 RCLCPP_WARN(logger_, "Frame cmd=0x%02X has bad length: got %zu bytes, expected %zu (len=%d)", 
+                                             cmd, frame_buffer.size(), expected_total_len, payload_len);
+                             }
                              print_hex_frame("Recv BAD LENGTH: ", frame_buffer);
                              wait_for_start = true; // Reset
+                        } else {
+                            // Frame too short - might be 0xFF in data, continue building
+                            // But if we've seen too many bytes, it's probably corruption
+                            if (frame_buffer.size() > MAX_FRAME_LENGTH / 2) {
+                                print_hex_frame("Recv SHORT FRAME: ", frame_buffer);
+                                wait_for_start = true; // Reset on suspiciously short frames
+                            }
                         }
-                        // Reset for the next frame
-                        wait_for_start = true;
                     }
                 }
                 

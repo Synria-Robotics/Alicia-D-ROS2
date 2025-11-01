@@ -5,7 +5,7 @@ from moveit_configs_utils import MoveItConfigsBuilder
 
 
 def get_versioned_moveit_config(robot_version='v5_6', gripper_type='50mm', 
-                                port='/dev/ttyCH341USB0', baud_rate='1000000'):
+                                port='/dev/ttyUSB0', baud_rate='1000000'):
     """
     Build MoveIt configuration for specified robot version and gripper type.
     
@@ -39,6 +39,8 @@ def get_versioned_moveit_config(robot_version='v5_6', gripper_type='50mm',
         'hw_port': port,
         'hw_baud_rate': baud_rate,
         'hw_gripper_type': gripper_type,
+        'hw_firmware_version': 'auto',
+        'hw_default_speed_rad_s': '0.349',
     }
     
     # Build MoveIt config with versioned xacro
