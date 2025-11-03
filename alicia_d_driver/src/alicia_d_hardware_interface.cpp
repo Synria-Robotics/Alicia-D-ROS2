@@ -50,9 +50,6 @@ CallbackReturn AliciaDHardwareInterface::on_init(
   current_gripper_position_m_ = 0.0;
   gripper_command_m_ = 0.0;
   
-  // Initialize state query timing (query state every 20ms = 50Hz)
-  state_query_period_sec_ = 0.02;
-  last_state_query_time_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
 
   // Initialize timing for rate limiting
   last_sent_positions_.resize(info_.joints.size() - 1, 0.0);  // -1 for gripper
@@ -287,7 +284,6 @@ return_type AliciaDHardwareInterface::write(
     last_log_time = time;
   }
   
-  // Log frequency and command values periodically (DEBUG level only)
   double time_since_log = (time - last_log_time).seconds();
   if (time_since_log >= 1.0)  // Every second
   {
@@ -331,66 +327,17 @@ return_type AliciaDHardwareInterface::write(
   
   communicator_->write_raw_frame(servo_frame);
 
-  // Build and send gripper frame (if gripper joint exists) - only on change
   if (hw_positions_command_.size() > 6)
   {
-    // Convert gripper position (meters) to 0-100 value
-    // Matching ROS1 driver node: URDF 0 = open, URDF stroke_m = closed
-    // Python SDK: 0 = closed, 100 = open
-    // Conversion: URDF meters -> 0-100 value (0=closed, 100=open)
     const double stroke_m = (gripper_type_ == "100mm") ? 0.05 : 0.025;
     double m = std::max(0.0, std::min(stroke_m, hw_positions_command_[6]));
-    // ROS1 formula: gripper_value = 100 - (m / stroke_m * 100)
-    // URDF 0 (open) -> gripper_value 100 (open)
-    // URDF stroke_m (closed) -> gripper_value 0 (closed)
-    double gripper_value = 100.0 - ((stroke_m > 1e-6 ? m / stroke_m : 0.0) * 100.0);
 
-    // Detect trajectory start: large change OR pause indicates new trajectory
-    // This ensures waypoints in new trajectories are not skipped even if close to previous end position
-    const double trajectory_start_threshold = 2.0;  // 2% of range indicates new trajectory
-    const double trajectory_pause_threshold_sec = 0.1;  // 100ms pause indicates new trajectory
-    bool is_new_trajectory = false;
-    
-    if (last_command_gripper_ >= 0.0)  // Valid previous command
-    {
-      double change_from_last_cmd = std::abs(gripper_value - last_command_gripper_);
-      
-      // Large jump (>= 2%) between consecutive commands indicates a new trajectory has started
-      if (change_from_last_cmd >= trajectory_start_threshold)
-      {
-        is_new_trajectory = true;
-      }
-      // If no gripper command sent for a while (>100ms), likely a new trajectory started
-      else if (last_gripper_send_time_.seconds() > 0.0)
-      {
-        double time_since_last_send = (time - last_gripper_send_time_).seconds();
-        if (time_since_last_send >= trajectory_pause_threshold_sec)
-        {
-          is_new_trajectory = true;
-        }
-      }
-      
-      if (is_new_trajectory)
-      {
-        // Reset last_sent_gripper_ to force sending all waypoints in new trajectory
-        last_sent_gripper_ = -1.0;
-      }
-    }
-    
-    // Update last commanded value
-    last_command_gripper_ = gripper_value;
+    const double gripper_threshold = 0.001; // meters
+    bool should_send = (last_sent_gripper_ < 0.0) || (std::abs(m - last_sent_gripper_) >= gripper_threshold);
 
-    // Only send gripper command if value changed significantly (threshold: 0.001 = 0.1%)
-    // or if this is the first command (last_sent_gripper_ is invalid)
-    // or if it's a new trajectory start
-    const double gripper_threshold = 0.001;  
-    bool gripper_changed = (last_sent_gripper_ < 0.0) ||  // First send
-                           is_new_trajectory ||           // New trajectory start
-                           (std::abs(gripper_value - last_sent_gripper_) >= gripper_threshold);
-    if (gripper_changed)
+    if (should_send)
     {
-      // Update last sent value and timestamp
-      last_sent_gripper_ = gripper_value;
+      last_sent_gripper_ = m;
       last_gripper_send_time_ = time;
 
       if (firmware_new_)
@@ -400,7 +347,7 @@ return_type AliciaDHardwareInterface::write(
       gripper_frame[1] = CMD_GRIPPER_CONTROL;
       gripper_frame[2] = 6;
       gripper_frame[3] = 1;
-      uint16_t target = rad_to_hardware_value_grip(gripper_value);
+      uint16_t target = rad_to_hardware_value_grip(m);
       gripper_frame[4] = 3400 & 0xFF;
       gripper_frame[5] = (3400 >> 8) & 0xFF;
       gripper_frame[6] = target & 0xFF;
@@ -418,13 +365,12 @@ return_type AliciaDHardwareInterface::write(
         gripper_frame[1] = CMD_GRIPPER_CONTROL;
         gripper_frame[2] = 3;
         gripper_frame[3] = 1;
-        uint16_t target = rad_to_hardware_value_grip(gripper_value);
+        uint16_t target = rad_to_hardware_value_grip(m);
         gripper_frame[4] = target & 0xFF;
         gripper_frame[5] = (target >> 8) & 0xFF;
         gripper_frame[6] = calculate_checksum(gripper_frame);
         gripper_frame[7] = FRAME_END_BYTE;
         
-
         communicator_->write_raw_frame(gripper_frame);
       }
     }
@@ -478,7 +424,7 @@ void AliciaDHardwareInterface::process_serial_data()
     }
 
     // Extract data payload: includes LEN byte to match parse function expectations
-    // Frame format: AA CMD LEN DATA... CHK FF
+    // Frame format: AA CMD LEN DATA CHK FF
     // Parse functions expect: LEN DATA...
     std::vector<uint8_t> data_payload;
     if (packet.size() >= 4)
@@ -649,22 +595,6 @@ void AliciaDHardwareInterface::send_firmware_query()
   communicator_->write_raw_frame(frame);
 }
 
-void AliciaDHardwareInterface::send_state_query()
-{
-  if (!communicator_ || !communicator_->is_connected()) return;
-  
-  // Send a query for current servo states
-  // Command 0x05 is typically a read/query command in many protocols
-  // If this doesn't work, the robot might auto-send state or we need a different command
-  std::vector<uint8_t> frame(6);
-  frame[0] = FRAME_START_BYTE;
-  frame[1] = 0x05;  // State query command (you may need to adjust based on robot protocol)
-  frame[2] = 0x01;  // Data length
-  frame[3] = 0x00;  // Query all servos
-  frame[4] = 0x00;  // Checksum (0 for query)
-  frame[5] = FRAME_END_BYTE;
-  communicator_->write_raw_frame(frame);
-}
 
 void AliciaDHardwareInterface::set_speed(double speed_rad_s)
 {
@@ -716,22 +646,23 @@ uint16_t AliciaDHardwareInterface::rad_to_hardware_value(double angle_rad)
   return std::max(0, std::min(4095, value));
 }
 
-uint16_t AliciaDHardwareInterface::rad_to_hardware_value_grip(double gripper_value)
+uint16_t AliciaDHardwareInterface::rad_to_hardware_value_grip(double gripper_m)
 {
-  // Matching ROS1 driver node exactly
-  // Input range: 0 (closed) to 100 (open)
-  double value = std::max(0.0, std::min(100.0, gripper_value));
-  
-  // Hardware mapping: 
-  // gripper_value=0 (closed) -> gripper_hw_max_ (hardware closed)
-  // gripper_value=100 (open) -> 2048 (hardware open)
-  // This is a REVERSE linear mapping (like Python SDK)
+  // Direct meters mapping: 0m (open) -> 2048, stroke_m (closed) -> gripper_hw_max
   constexpr double GRIPPER_HW_MIN = 2048.0;  // Fully open (common for all gripper types)
   const double gripper_hw_max = (gripper_type_ == "100mm") ? 3600.0 : 3290.0;
-  const double ratio = (gripper_hw_max - GRIPPER_HW_MIN) / 100.0;
-  const double hw_value = gripper_hw_max - (value * ratio);  // Reverse mapping
+  const double stroke_m = (gripper_type_ == "100mm") ? 0.05 : 0.025;
+
+  double m = std::max(0.0, std::min(stroke_m, gripper_m));
+  double t = (stroke_m > 1e-9) ? (m / stroke_m) : 0.0;
+  const double hw_value = GRIPPER_HW_MIN + t * (gripper_hw_max - GRIPPER_HW_MIN);
   const int hardware_value = static_cast<int>(std::round(hw_value));
-  
+  RCLCPP_DEBUG(rclcpp::get_logger("AliciaDHardwareInterface"), "hardware_value: %d", hardware_value);
+  RCLCPP_DEBUG(rclcpp::get_logger("AliciaDHardwareInterface"), "gripper_hw_max: %f", gripper_hw_max);
+  RCLCPP_DEBUG(rclcpp::get_logger("AliciaDHardwareInterface"), "stroke_m: %f", stroke_m);
+  RCLCPP_DEBUG(rclcpp::get_logger("AliciaDHardwareInterface"), "m: %f", m);
+  RCLCPP_DEBUG(rclcpp::get_logger("AliciaDHardwareInterface"), "t: %f", t);
+  RCLCPP_DEBUG(rclcpp::get_logger("AliciaDHardwareInterface"), "hw_value: %f", hw_value);
   return std::max(static_cast<int>(GRIPPER_HW_MIN), std::min(static_cast<int>(gripper_hw_max), hardware_value));
 }
 
@@ -744,19 +675,16 @@ double AliciaDHardwareInterface::hardware_value_to_rad(uint16_t hw_value)
 
 double AliciaDHardwareInterface::hardware_value_to_rad_grip(uint16_t hw_value)
 {
-  // Matching ROS1 driver node exactly
+  // Direct mapping from hardware counts to meters
+  // 2048 (open) -> 0.0 m, gripper_hw_max (closed) -> stroke_m
   constexpr double GRIPPER_HW_MIN = 2048.0;  // Fully open (common for all gripper types)
   const double gripper_hw_max = (gripper_type_ == "100mm") ? 3600.0 : 3290.0;
-  hw_value = std::max(static_cast<int>(GRIPPER_HW_MIN), std::min(static_cast<int>(gripper_hw_max), (int)hw_value));
-  // Inverse map for feedback: gripper_hw_max (closed) -> 0, 2048 (open) -> 100
-  const double ratio = (gripper_hw_max - GRIPPER_HW_MIN) / 100.0;
-  const double gripper_value = 100.0 - ((static_cast<double>(hw_value) - GRIPPER_HW_MIN) / ratio);
-  // Convert to meters for JointState publication
-  // Use gripper type to determine stroke: 100mm -> 0.05m, 50mm -> 0.025m
   const double stroke_m = (gripper_type_ == "100mm") ? 0.05 : 0.025;
-  // Where gripper_value=0 (closed) -> stroke_m, gripper_value=100 (open) -> 0m
-  const double gripper_m = (1.0 - gripper_value / 100.0) * stroke_m;
-  return gripper_m; // Return in meters (prismatic joint)
+
+  int clamped = std::max(static_cast<int>(GRIPPER_HW_MIN), std::min(static_cast<int>(gripper_hw_max), static_cast<int>(hw_value)));
+  double t = (gripper_hw_max > GRIPPER_HW_MIN) ? ((static_cast<double>(clamped) - GRIPPER_HW_MIN) / (gripper_hw_max - GRIPPER_HW_MIN)) : 0.0;
+  double gripper_m = t * stroke_m;
+  return gripper_m; // meters (prismatic joint)
 }
 
 uint8_t AliciaDHardwareInterface::calculate_checksum(const std::vector<uint8_t>& frame_data)
