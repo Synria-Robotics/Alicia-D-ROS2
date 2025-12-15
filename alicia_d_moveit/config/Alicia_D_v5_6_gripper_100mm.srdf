@@ -10,10 +10,10 @@
     <!--CHAINS: When a chain is specified, all the links along the chain (including endpoints) are included in the group. Additionally, all the joints that are parents to included links are also included. This means that joints along the chain and the parent joint of the base link are included in the group-->
     <!--SUBGROUPS: Groups can also be formed by referencing to already defined group names-->
     <group name="Alicia">
-        <chain base_link="base_link" tip_link="tool0"/>
+        <chain base_link="base_link" tip_link="gripper_center"/>
     </group>
     <group name="Gripper">
-        <joint name="right_finger"/>
+        <joint name="Gripper"/>
     </group>
     <!--GROUP STATES: Purpose: Define a named state for a particular group, in terms of joint values. This is useful to define states like 'folded arms'-->
     <group_state name="home" group="Alicia">
@@ -25,10 +25,10 @@
         <joint name="Joint6" value="0"/>
     </group_state>
     <group_state name="open" group="Gripper">
-        <joint name="right_finger" value="0"/>
+        <joint name="Gripper" value="0"/>
     </group_state>
     <group_state name="close" group="Gripper">
-        <joint name="right_finger" value="0.032"/>
+        <joint name="Gripper" value="0.032"/>
     </group_state>
     <!--PASSIVE JOINT: Purpose: this element is used to mark joints that are not actuated-->
     <passive_joint name="left_finger"/>
@@ -38,28 +38,26 @@
     <disable_collisions link1="Link1" link2="base_link" reason="Adjacent"/>
     <disable_collisions link1="Link2" link2="Link3" reason="Adjacent"/>
     <disable_collisions link1="Link2" link2="Link4" reason="Never"/>
-    <disable_collisions link1="Link2" link2="Link7" reason="Never"/>
-    <disable_collisions link1="Link2" link2="Link8" reason="Never"/>
+    <disable_collisions link1="Link2" link2="left_gripper" reason="Never"/>
+    <disable_collisions link1="Link2" link2="right_gripper" reason="Never"/>
     <disable_collisions link1="Link2" link2="base_link" reason="Never"/>
     <disable_collisions link1="Link3" link2="Link4" reason="Adjacent"/>
     <disable_collisions link1="Link3" link2="Link5" reason="Never"/>
     <disable_collisions link1="Link3" link2="Link6" reason="Never"/>
-    <disable_collisions link1="Link3" link2="Link7" reason="Never"/>
-    <disable_collisions link1="Link3" link2="Link8" reason="Never"/>
+    <disable_collisions link1="Link3" link2="left_gripper" reason="Never"/>
+    <disable_collisions link1="Link3" link2="right_gripper" reason="Never"/>
     <disable_collisions link1="Link3" link2="base_link" reason="Never"/>
     <disable_collisions link1="Link4" link2="Link5" reason="Adjacent"/>
     <disable_collisions link1="Link4" link2="Link6" reason="Never"/>
-    <disable_collisions link1="Link4" link2="Link7" reason="Never"/>
-    <disable_collisions link1="Link4" link2="Link8" reason="Never"/>
+    <disable_collisions link1="Link4" link2="left_gripper" reason="Never"/>
+    <disable_collisions link1="Link4" link2="right_gripper" reason="Never"/>
     <disable_collisions link1="Link5" link2="Link6" reason="Adjacent"/>
-    <disable_collisions link1="Link5" link2="Link7" reason="Never"/>
-    <disable_collisions link1="Link5" link2="Link8" reason="Never"/>
-    <disable_collisions link1="Link6" link2="Link7" reason="Adjacent"/>
-    <disable_collisions link1="Link6" link2="Link8" reason="Adjacent"/>
-    <disable_collisions link1="Link7" link2="Link8" reason="Never"/>
-    <disable_collisions link1="Link7" link2="tool0" reason="Never"/>
-    <disable_collisions link1="Link8" link2="tool0" reason="Never"/>
-    <disable_collisions link1="world" link2="Link7" reason="Default"/>
-    <disable_collisions link1="world" link2="Link8" reason="Default"/>
-    <disable_collisions link1="world" link2="tool0" reason="Default"/>
+    <disable_collisions link1="Link5" link2="left_gripper" reason="Never"/>
+    <disable_collisions link1="Link5" link2="right_gripper" reason="Never"/>
+    <disable_collisions link1="Link6" link2="left_gripper" reason="Adjacent"/>
+    <disable_collisions link1="Link6" link2="right_gripper" reason="Adjacent"/>
+    <disable_collisions link1="Link6" link2="gripper_center" reason="Adjacent"/>
+    <disable_collisions link1="left_gripper" link2="right_gripper" reason="Never"/>
+    <disable_collisions link1="left_gripper" link2="gripper_center" reason="Never"/>
+    <disable_collisions link1="right_gripper" link2="gripper_center" reason="Never"/>
 </robot>

@@ -1,18 +1,12 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
-    <xacro:macro name="alicia_d_descriptions_ros2_control" params="name initial_positions_file 
-                 hw_port:=
-                 hw_debug_mode:=false 
-                 hw_gripper_type:=50mm 
-                 hw_default_speed_rad_s:=0.349">
+    <xacro:macro name="alicia_d_descriptions_ros2_control" params="name initial_positions_file">
         <xacro:property name="initial_positions" value="${xacro.load_yaml(initial_positions_file)['initial_positions']}"/>
 
         <ros2_control name="${name}" type="system">
             <hardware>
-                <plugin>alicia_d_driver/AliciaDHardwareInterface</plugin>
-                <param name="port">${hw_port}</param>
-                <param name="gripper_type">${hw_gripper_type}</param>
-                <param name="default_speed_rad_s">${hw_default_speed_rad_s}</param>
+                <plugin>fake_components/GenericSystem</plugin>
+                <param name="state_following_offset">0.0</param>
             </hardware>
             <joint name="Joint1">
                 <command_interface name="position"/>
@@ -74,3 +68,4 @@
         </ros2_control>
     </xacro:macro>
 </robot>
+

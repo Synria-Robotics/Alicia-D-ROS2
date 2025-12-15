@@ -3,7 +3,7 @@
     <xacro:arg name="initial_positions_file" default="initial_positions.yaml" />
 
     <!-- Import alicia_d_descriptions urdf file -->
-    <xacro:include filename="$(find alicia_d_descriptions)/urdf/Alicia_D_v5_6/Alicia_D_gripper_50mm.urdf" />
+    <xacro:include filename="$(find alicia_d_descriptions)/urdf/Alicia_D_v5_6/Alicia_D_v5_6_gripper_50mm.urdf" />
 
     <!-- Import control_xacro -->
     <xacro:include filename="alicia_d_descriptions.ros2_control.xacro" />

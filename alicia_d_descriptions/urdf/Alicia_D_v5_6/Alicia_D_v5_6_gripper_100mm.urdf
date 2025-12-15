@@ -13,8 +13,9 @@
       <exclude body1="Link3" body2="Link4"/>
       <exclude body1="Link4" body2="Link5"/>
       <exclude body1="Link5" body2="Link6"/>
-      <exclude body1="Link6" body2="Link7_100mm"/>
-      <exclude body1="Link7_100mm" body2="Link8_100mm"/>
+      <exclude body1="Link6" body2="left_gripper"/>
+      <exclude body1="left_gripper" body2="right_gripper"/>
+      <exclude body1="right_gripper" body2="gripper_center"/>
     </contact>
   </mujoco>
   <link
@@ -462,8 +463,8 @@
       upper="0.05"
       effort="5"
       velocity="12" />
+    <mimic joint="Gripper" multiplier="-1" offset="0"/>
   </joint>
-  <mimic joint="Gripper" multiplier="-1" offset="0"/>
   <link
     name="right_gripper">
     <inertial>

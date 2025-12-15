@@ -38,7 +38,7 @@ joint_limits:
     max_velocity: 3.0
     has_acceleration_limits: false
     max_acceleration: 0
-  right_finger:
+  Gripper:
     has_velocity_limits: true
     max_velocity: 1.0
     has_acceleration_limits: false

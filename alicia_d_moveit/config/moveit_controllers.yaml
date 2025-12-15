@@ -3,7 +3,7 @@
 moveit_controller_manager: moveit_simple_controller_manager/MoveItSimpleControllerManager
 
 moveit_simple_controller_manager:
-  update_rate: 200
+  update_rate: 200  # Hz - Real-time control rate
   controller_names:
     - Alicia_controller
     - Gripper_controller
@@ -26,6 +26,6 @@ moveit_simple_controller_manager:
     action_ns: follow_joint_trajectory 
     default: true 
     joints:
-      - right_finger
+      - Gripper
     action_ns: follow_joint_trajectory
     default: true
