@@ -152,8 +152,8 @@ bool SerialCommunicator::write_packet(const std::vector<uint8_t>& frame)
         }
         
         // Always print sent frames for debugging
-        std::string hex_str = format_hex_bytes(frame);
-        RCLCPP_INFO(logger_, "TX [%zu bytes]: %s", frame.size(), hex_str.c_str());
+        // std::string hex_str = format_hex_bytes(frame);
+        // RCLCPP_INFO(logger_, "TX [%zu bytes]: %s", frame.size(), hex_str.c_str());
         
         return true;
     } catch (const std::exception& e) {

@@ -36,8 +36,10 @@ CallbackReturn AliciaDHardwareInterface::on_init(
   hw_velocities_state_.resize(info_.joints.size(), 0.0);
   hw_velocities_command_.resize(info_.joints.size(), 0.0);
 
-  // Initialize timing for real-time control (no rate limiting needed)
-  last_write_time_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+  // Initialize timing for real-time control (no rate limiting needed).
+  // Use steady time to match controller_manager's clock type and avoid
+  // "can't subtract times with different time sources" exceptions.
+  last_write_time_ = rclcpp::Time(0, 0, RCL_STEADY_TIME);
   min_write_period_ = 0.0;  // No rate limiting - send commands every cycle for real-time control
 
   // Initialize hardware connection status
@@ -182,10 +184,13 @@ return_type AliciaDHardwareInterface::read(
     return return_type::OK;
   }
 
-  // Note: Parsing happens in background thread (started in on_activate)
-  // We periodically request joint data to keep state fresh (matching driver node)
-  static rclcpp::Time last_joint_request(0, 0, RCL_ROS_TIME);
-  rclcpp::Time now = rclcpp::Clock().now();
+  // Note: Parsing happens in background thread (started in on_activate).
+  // We periodically request joint data to keep state fresh (matching driver node).
+  // Use a steady clock so time differences are computed with a consistent
+  // time source, matching controller_manager's use of steady time.
+  static rclcpp::Clock steady_clock(RCL_STEADY_TIME);
+  static rclcpp::Time last_joint_request(0, 0, RCL_STEADY_TIME);
+  rclcpp::Time now = steady_clock.now();
   if ((now - last_joint_request).seconds() >= 0.05)  // Request at 20 Hz (matching driver node)
   {
     data_parser_control_->acquire_info("joint", false);

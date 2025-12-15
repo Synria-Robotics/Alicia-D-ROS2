@@ -8,6 +8,7 @@ from launch_ros.substitutions import FindPackageShare
 from moveit_configs_utils.launches import generate_move_group_launch, generate_moveit_rviz_launch
 import sys
 import os
+import subprocess
 sys.path.append(os.path.dirname(__file__))
 from moveit_config_builder import get_versioned_moveit_config
 
@@ -18,15 +19,19 @@ def launch_setup(context, *args, **kwargs):
     robot_version = LaunchConfiguration('robot_version').perform(context)
     gripper_type = LaunchConfiguration('gripper_type').perform(context)
     port = LaunchConfiguration('port').perform(context)
-    baud_rate = LaunchConfiguration('baud_rate').perform(context)
-    firmware_version = LaunchConfiguration('firmware_version').perform(context)
     
-    print(f'\033[1;32m[INFO] Launching real robot with version: {robot_version}, gripper: {gripper_type}\033[0m')
-    print(f'\033[1;32m[INFO] Serial port: {port}, baud rate: {baud_rate}\033[0m')
-    print(f'\033[1;32m[INFO] Firmware version: {firmware_version}\033[0m')
+    # Validate gripper type
+    if gripper_type not in ["50mm", "100mm"]:
+        print(f'\033[1;33m[WARN] Invalid gripper_type: {gripper_type}, using default: 50mm\033[0m')
+        gripper_type = "50mm"
     
-    # Get versioned MoveIt config with hardware parameters
-    moveit_config = get_versioned_moveit_config(robot_version, gripper_type, port, baud_rate, firmware_version)
+    print(f'\033[1;32m[INFO] Launching REAL ROBOT control with version: {robot_version}\033[0m')
+    print(f'\033[1;32m[INFO] Serial port: {port if port else "(auto-detect)"}\033[0m')
+    print(f'\033[1;32m[INFO] Gripper type: {gripper_type}\033[0m')
+    print(f'\033[1;33m[INFO] Real robot mode: Hardware connection required\033[0m')
+    
+    # Get versioned MoveIt config with specified gripper type and port
+    moveit_config = get_versioned_moveit_config(robot_version, gripper_type, port)
     
     # Update robot description with hardware interface parameters
     robot_description = moveit_config.robot_description
@@ -159,30 +164,16 @@ def launch_setup(context, *args, **kwargs):
 def generate_launch_description():
     """Generate launch description for real robot control."""
     return LaunchDescription([
-        DeclareLaunchArgument(
-            'robot_version',
-            default_value='v5_6',
-            description='Robot version: v5_5 or v5_6'
-        ),
+
         DeclareLaunchArgument(
             'gripper_type',
             default_value='50mm',
-            description='Gripper type: 50mm or 100mm'
+            description='Gripper type: "50mm" or "100mm"'
         ),
         DeclareLaunchArgument(
             'port',
-            default_value='/dev/ttyUSB0',
-            description='Serial port for robot connection (e.g., /dev/ttyUSB0 or /dev/ttyCH341USB0)'
-        ),
-        DeclareLaunchArgument(
-            'baud_rate',
-            default_value='1000000',
-            description='Baud rate for serial communication'
-        ),
-        DeclareLaunchArgument(
-            'firmware_version',
-            default_value='auto',
-            description='Firmware version (e.g., "5.0.0", "6.0.0", or "auto" for auto-detection)'
+            default_value='',
+            description='Serial port for robot connection (e.g., /dev/ttyACM0). Leave empty for auto-detection.'
         ),
         OpaqueFunction(function=launch_setup)
     ])

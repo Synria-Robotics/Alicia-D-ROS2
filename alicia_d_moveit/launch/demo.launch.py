@@ -171,11 +171,7 @@ def launch_setup(context, *args, **kwargs):
 def generate_launch_description():
     """Generate launch description with robot version and gripper type arguments."""
     return LaunchDescription([
-        DeclareLaunchArgument(
-            'robot_version',
-            default_value='v5_6',
-            description='Robot version: v5_5 or v5_6'
-        ),
+
         DeclareLaunchArgument(
             'gripper_type',
             default_value='50mm',
