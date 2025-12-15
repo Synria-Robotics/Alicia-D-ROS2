@@ -42,17 +42,6 @@ alicia_d_driver/
 ├── alicia_d_driver.xml                     # 插件描述
 └── CMakeLists.txt
 
-alicia_d_moveit/
-├── config/
-│   ├── alicia_d_descriptions.ros2_control.xacro  # 硬件接口配置
-│   ├── ros2_controllers.yaml               # 控制器配置
-│   ├── moveit_controllers.yaml             # MoveIt 控制器映射
-│   └── ...                                 # 其他 MoveIt 配置
-├── launch/
-│   ├── real_robot.launch.py                # 真实机械臂启动
-│   ├── demo.launch.py                      # 仿真启动
-│   └── ...                                 # 其他启动文件
-└── package.xml
 ```
 
 ## 快速开始
@@ -67,7 +56,7 @@ sudo usermod -a -G dialout $USER
 
 或临时设置：
 ```bash
-sudo chmod 666 /dev/ttyCH341USB0
+sudo chmod 666 /dev/ttyACM*
 ```
 
 ### 2. 获取源代码并编译
@@ -75,27 +64,18 @@ sudo chmod 666 /dev/ttyCH341USB0
 ```bash
 mkdir -p ~/alicia_ws/src
 cd ~/alicia_ws
-git clone https://github.com/Synria-Robotics/Alicia-D-ROS2.git -b v6.0.0 ./src
+git clone https://github.com/Synria-Robotics/Alicia-D-ROS2.git -b v6.1.0 ./src
 rosdep install --from-paths src --ignore-src -r -y
-colcon build --packages-select alicia_d_driver alicia_d_moveit
+colcon build
 source install/setup.bash
 ```
 
-### 3. 启动真实机械臂与 MoveIt
+### 3. 启动真实机械臂
 
 ```bash
-ros2 launch alicia_d_moveit real_robot.launch.py
+ros2 launch alicia_d_driver alicia_d_driver.launch.py
 ```
 
-**使用自定义参数：**
-```bash
-ros2 launch alicia_d_moveit real_robot.launch.py \
-    robot_version:=v5_6 \
-    gripper_type:=100mm \
-    port:=/dev/ttyCH341USB0 \
-    baud_rate:=1000000 \
-    firmware_version:=auto
-```
 
 ## 使用方法
 
@@ -105,52 +85,19 @@ ros2 launch alicia_d_moveit real_robot.launch.py \
 |-----------|---------|-------------|
 | `robot_version` | `v5_6` | 机械臂版本 (`v5_5` 或 `v5_6`) |
 | `gripper_type` | `50mm` | 夹爪行程 (`50mm` 或 `100mm`) |
-| `port` | `/dev/ttyUSB0` | 串口设备 |
-| `baud_rate` | `1000000` | 串口波特率 |
-| `firmware_version` | `auto` | 固件版本 (`5.0.0`, `6.0.0`, 或 `auto` 自动检测) |
-
+| `port` | `/dev/ttyACM0` | 串口设备 |
 ### 启动选项
 
-#### 选项 1：真实机械臂与 MoveIt（推荐）
 
-```bash
-ros2 launch alicia_d_moveit real_robot.launch.py \
-    robot_version:=v5_6 \
-    gripper_type:=50mm \
-    port:=/dev/ttyCH341USB0 \
-    baud_rate:=1000000 \
-    firmware_version:=auto
-```
-
-#### 选项 2：仅仿真（无硬件）
-
-```bash
-ros2 launch alicia_d_moveit demo.launch.py \
-    robot_version:=v5_6 \
-    gripper_type:=50mm
-```
 
 #### 选项 3：独立驱动（无 MoveIt）
 
 ```bash
 ros2 launch alicia_d_driver alicia_d_driver.launch.py \
-    port:=/dev/ttyCH343USB0 \
+    port:=/dev/ttyACM0 \
     gripper_type:=100mm \
-    firmware_version:=6.0.0
 ```
 
-### 在 RViz 中使用 MoveIt
-
-1. **设置目标状态**：拖动交互式标记点
-2. **规划运动**：点击 "Plan" 按钮
-3. **执行运动**：点击 "Execute" 或 "Plan & Execute"
-
-## 特殊命令
-
-启动独立驱动:
-```
-ros2 launch alicia_d_driver alicia_d_driver.launch.py port:=/dev/ttyUSB0 gripper_type:=100mm firmware_version:=6.0.0
-```
 
 ### 使能手引导模式（零力矩）
 
@@ -187,7 +134,7 @@ ros2 topic pub --once /zero_calibrate std_msgs/msg/Bool "{data: true}"
 **解决方案**：
 1. 检查线缆连接
 2. 验证端口名称：`ls /dev/tty*`
-3. 检查权限：`ls -l /dev/ttyCH341USB0`
+3. 检查权限：`ls -l /dev/ttyACM0`
 4. 将用户添加到 dialout 组：`sudo usermod -a -G dialout $USER`
 
 ### 控制器故障
@@ -207,7 +154,6 @@ ros2 topic pub --once /zero_calibrate std_msgs/msg/Bool "{data: true}"
 1. 验证固件版本是否正确检测（查看日志）
 2. 确保夹爪类型与硬件匹配（50mm vs 100mm）
 3. 使用 `debug_mode:=true` 监控串口通信
-4. 尝试显式指定固件版本：`firmware_version:=5.0.0`
 
 ## 文档
 
@@ -217,16 +163,6 @@ ros2 topic pub --once /zero_calibrate std_msgs/msg/Bool "{data: true}"
 *   [MoveIt 2 文档](https://moveit.picknik.ai/main/index.html)
 *   [ros2_control 文档](https://control.ros.org/)
 *   [ROS2 Humble 文档](https://docs.ros.org/en/humble/)
-
-## 系统架构
-
-```
-MoveIt → Joint Trajectory Controllers → ros2_control → Hardware Interface → Serial → Robot
-                                                ↓
-                                        Joint State Publisher
-                                                ↓
-                                           /joint_states
-```
 
 ## 安全注意事项
 
