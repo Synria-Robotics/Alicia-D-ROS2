@@ -1,8 +1,6 @@
 #include "alicia_d_driver/alicia_d_hardware_interface.hpp"
 
 #include <cmath>
-#include <numeric>
-#include <algorithm>
 #include <string>
 #include <vector>
 #include <chrono>
@@ -21,52 +19,35 @@ CallbackReturn AliciaDHardwareInterface::on_init(
 
   // Get parameters from URDF
   port_ = info_.hardware_parameters["port"];
-  baud_rate_ = std::stoi(info_.hardware_parameters["baud_rate"]);
   debug_mode_ = info_.hardware_parameters.count("debug_mode") ? 
                 (info_.hardware_parameters["debug_mode"] == "true") : false;
-  servo_count_ = info_.hardware_parameters.count("servo_count") ? 
-                 std::stoi(info_.hardware_parameters["servo_count"]) : 9;
-  gripper_type_ = info_.hardware_parameters.count("gripper_type") ? 
-                  info_.hardware_parameters["gripper_type"] : "50mm";
-  firmware_version_ = info_.hardware_parameters.count("firmware_version") ? 
-                      info_.hardware_parameters["firmware_version"] : "auto";
   
-  // Speed control parameter (for V6+ firmware, default ~20 deg/s = 0.349 rad/s)
+  // Gripper type (required: "50mm" or "100mm", default "50mm")
+  gripper_type_param_ = info_.hardware_parameters.count("gripper_type") ? 
+                         info_.hardware_parameters["gripper_type"] : "50mm";
+  
+  // Speed control parameter (default ~20 deg/s = 0.349 rad/s)
   default_speed_rad_s_ = info_.hardware_parameters.count("default_speed_rad_s") ? 
                          std::stod(info_.hardware_parameters["default_speed_rad_s"]) : 0.349;
 
   // Initialize state and command vectors
   hw_positions_state_.resize(info_.joints.size(), 0.0);
   hw_positions_command_.resize(info_.joints.size(), 0.0);
+  hw_velocities_state_.resize(info_.joints.size(), 0.0);
+  hw_velocities_command_.resize(info_.joints.size(), 0.0);
 
-  // Setup joint to servo mappings
-  joint_to_servo_map_index_ = {0, 0, 1, 1, 2, 2, 3, 4, 5};
-  joint_to_servo_map_direction_ = {1.0, 1.0, 1.0, -1.0, 1.0, -1.0, 1.0, 1.0, 1.0};
-  servo_to_joint_map_index_ = {0, -1, 1, -1, 2, -1, 3, 4, 5}; // -1 means ignore
-  servo_to_joint_map_direction_ = {1.0, 0, 1.0, 0, 1.0, 0, 1.0, 1.0, 1.0};
-
-  firmware_version_detected_ = false;
-  firmware_new_ = false;
-  current_gripper_position_m_ = 0.0;
-  gripper_command_m_ = 0.0;
-  
-
-  // Initialize timing for rate limiting
-  last_sent_positions_.resize(info_.joints.size() - 1, 0.0);  // -1 for gripper
-  last_sent_gripper_ = -1.0;  // Initialize to invalid value to force first send
-  last_command_gripper_ = -1.0;  // Initialize to invalid value
+  // Initialize timing for real-time control (no rate limiting needed)
   last_write_time_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
-  last_gripper_send_time_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
-  command_change_threshold_ = 0.0001;  // Unused now, kept for compatibility
-  min_write_period_ = 0.020;            // 20ms = 50Hz (matches Python SDK HardwareExecutor delay)
-  min_write_period_idle_ = 0.010;      // Unused now
-  has_sent_initial_command_ = false;
+  min_write_period_ = 0.0;  // No rate limiting - send commands every cycle for real-time control
+
+  // Initialize hardware connection status
+  hardware_connected_ = false;
 
   RCLCPP_INFO(rclcpp::get_logger("AliciaDHardwareInterface"), 
-              "Initialized hardware interface (rate-limited command sending)");
+              "Initialized hardware interface (using unified data parser control)");
   RCLCPP_INFO(rclcpp::get_logger("AliciaDHardwareInterface"), 
-              "Port: %s, Baud: %d, Command rate limit: %.0f Hz (matches Python SDK)", 
-              port_.c_str(), baud_rate_, 1.0 / min_write_period_);
+              "Port: %s, Real-time control enabled", 
+              port_.empty() ? "(auto-detect)" : port_.c_str());
 
   return CallbackReturn::SUCCESS;
 }
@@ -76,8 +57,10 @@ CallbackReturn AliciaDHardwareInterface::on_configure(
 {
   RCLCPP_INFO(rclcpp::get_logger("AliciaDHardwareInterface"), "Configuring hardware interface...");
   
-  // Create serial communicator
-  communicator_ = std::make_unique<SerialCommunicator>(port_, baud_rate_, debug_mode_);
+  // Create serial communicator and data parser control (matching driver node)
+  communicator_ = std::make_unique<SerialCommunicator>(port_, debug_mode_);
+  data_parser_control_ = std::make_unique<AliciaDDataParserControl>(
+      communicator_.get(), rclcpp::get_logger("AliciaDHardwareInterface"), debug_mode_, gripper_type_param_);
   
   return CallbackReturn::SUCCESS;
 }
@@ -90,6 +73,8 @@ std::vector<hardware_interface::StateInterface> AliciaDHardwareInterface::export
   {
     state_interfaces.emplace_back(hardware_interface::StateInterface(
       info_.joints[i].name, hardware_interface::HW_IF_POSITION, &hw_positions_state_[i]));
+    state_interfaces.emplace_back(hardware_interface::StateInterface(
+      info_.joints[i].name, hardware_interface::HW_IF_VELOCITY, &hw_velocities_state_[i]));
   }
 
   return state_interfaces;
@@ -103,6 +88,8 @@ std::vector<hardware_interface::CommandInterface> AliciaDHardwareInterface::expo
   {
     command_interfaces.emplace_back(hardware_interface::CommandInterface(
       info_.joints[i].name, hardware_interface::HW_IF_POSITION, &hw_positions_command_[i]));
+    command_interfaces.emplace_back(hardware_interface::CommandInterface(
+      info_.joints[i].name, hardware_interface::HW_IF_VELOCITY, &hw_velocities_command_[i]));
   }
 
   return command_interfaces;
@@ -113,86 +100,34 @@ CallbackReturn AliciaDHardwareInterface::on_activate(
 {
   RCLCPP_INFO(rclcpp::get_logger("AliciaDHardwareInterface"), "Activating hardware interface...");
   
-  // Connect to serial port
-  if (!communicator_->connect())
+  // Try to connect to serial port
+  if (communicator_->connect())
   {
-    RCLCPP_ERROR(rclcpp::get_logger("AliciaDHardwareInterface"), 
-                 "Failed to connect to serial port: %s", port_.c_str());
-    return CallbackReturn::ERROR;
-  }
-
-  RCLCPP_INFO(rclcpp::get_logger("AliciaDHardwareInterface"), 
-              "Connected to robot. Enabling full torque mode.");
-
-
-
-  // Query firmware version if needed
-  if (firmware_version_.empty() || firmware_version_ == "auto")
-  {
+    hardware_connected_ = true;
     RCLCPP_INFO(rclcpp::get_logger("AliciaDHardwareInterface"), 
-                "Firmware version not specified, attempting auto-detection...");
-    send_firmware_query();
-    // Wait and process responses to get firmware version
-    // Try multiple times as robot may need time to respond
-    for (int i = 0; i < 40 && !firmware_version_detected_; ++i)  // Wait up to 2 seconds
-    {
-      std::this_thread::sleep_for(std::chrono::milliseconds(50));
-      process_serial_data();  // Process any incoming firmware version response
-    }
+                "Connected to robot. Starting parsing thread and querying information.");
+
+    // Start parsing thread (matching driver node - background thread for continuous data parsing)
+    data_parser_control_->start_parsing_thread();
+
+    // Query all information types (matching driver node)
+    data_parser_control_->acquire_info("version", true, 3.0, 0.2);
+    data_parser_control_->acquire_info("temperature", true, 2.0, 0.2);
+    data_parser_control_->acquire_info("velocity", true, 2.0, 0.2);
+    data_parser_control_->acquire_info("self_check", true, 2.0, 0.2);
     
-    // If still not detected, try sending query again
-    if (!firmware_version_detected_)
-    {
-      RCLCPP_INFO(rclcpp::get_logger("AliciaDHardwareInterface"), 
-                  "First query timeout, sending version query again...");
-      send_firmware_query();
-      for (int i = 0; i < 20 && !firmware_version_detected_; ++i)  // Wait another 1 second
-      {
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        process_serial_data();
-      }
-    }
-  }
-  else
-  {
-    firmware_version_detected_ = true;
-    // Parse version string to determine if V6+
-    // Version format: "X.Y.Z" where X is major version
-    if (!firmware_version_.empty() && firmware_version_[0] >= '6')
-    {
-      firmware_new_ = true;
-    }
-    else
-    {
-      firmware_new_ = false;
-    }
-    RCLCPP_INFO(rclcpp::get_logger("AliciaDHardwareInterface"), 
-                "Using specified firmware version: %s (V6+=%s)", 
-                firmware_version_.c_str(), firmware_new_ ? "true" : "false");
-  }
+    // Print all available information
+    data_parser_control_->print_information();
 
-  // Set speed for V6+ firmware (critical for smooth motion!)
-  if (firmware_new_)
-  {
-    RCLCPP_INFO(rclcpp::get_logger("AliciaDHardwareInterface"), 
-                "V6+ firmware detected, setting speed: %.1f deg/s (%.3f rad/s)", 
-                default_speed_rad_s_ * 180.0 / M_PI, default_speed_rad_s_);
-    set_speed(default_speed_rad_s_);
-  }
-  else if (firmware_version_detected_)
-  {
-    RCLCPP_INFO(rclcpp::get_logger("AliciaDHardwareInterface"), 
-                "V5 firmware detected, speed control not available");
+    // Enable torque using data parser control
+    data_parser_control_->torque_control("on");
   }
   else
   {
+    hardware_connected_ = false;
     RCLCPP_WARN(rclcpp::get_logger("AliciaDHardwareInterface"), 
-                "Firmware version not detected. Defaulting to V5 behavior (no speed control).");
-    RCLCPP_WARN(rclcpp::get_logger("AliciaDHardwareInterface"), 
-                "If this is incorrect, specify firmware_version parameter explicitly.");
-    // Default to V5 (older firmware) if detection fails
-    firmware_new_ = false;
-    // Do NOT set speed for V5 firmware
+                "No hardware connected. Running in simulation/demo mode. "
+                "Hardware interface will accept commands but they will not be sent to robot.");
   }
 
   // Initialize command to current state
@@ -206,529 +141,160 @@ CallbackReturn AliciaDHardwareInterface::on_deactivate(
 {
   RCLCPP_INFO(rclcpp::get_logger("AliciaDHardwareInterface"), "Deactivating hardware interface...");
   
-  // Disconnect from serial port
-  if (communicator_)
+  // Stop parsing thread (matching driver node) only if hardware was connected
+  if (hardware_connected_ && data_parser_control_)
+  {
+    data_parser_control_->stop_parsing_thread();
+  }
+  
+  // Disconnect from serial port only if hardware was connected
+  if (hardware_connected_ && communicator_)
   {
     communicator_->disconnect();
   }
+  
+  hardware_connected_ = false;
 
   return CallbackReturn::SUCCESS;
 }
 
 return_type AliciaDHardwareInterface::read(
-  const rclcpp::Time & time, const rclcpp::Duration & /*period*/)
+  const rclcpp::Time & /*time*/, const rclcpp::Duration & /*period*/)
 {
-  if (!communicator_ || !communicator_->is_connected())
+  // If hardware is not connected, simulate state updates (copy commands to state for simulation)
+  if (!hardware_connected_ || !communicator_ || !communicator_->is_connected() || !data_parser_control_)
   {
-    return return_type::ERROR;
+    // In simulation mode, update state to match commands (simulate ideal robot)
+    std::lock_guard<std::mutex> lock(data_mutex_);
+    hw_positions_state_ = hw_positions_command_;
+    // Set velocities to zero in simulation (or copy from commands if provided)
+    for (size_t i = 0; i < hw_velocities_state_.size(); ++i)
+    {
+      if (i < hw_velocities_command_.size())
+      {
+        hw_velocities_state_[i] = hw_velocities_command_[i];
+      }
+      else
+      {
+        hw_velocities_state_[i] = 0.0;
+      }
+    }
+    return return_type::OK;
   }
 
-  // Process incoming serial data - updates hw_positions_state_ when robot sends feedback
-  process_serial_data();
-  
-
-  static int read_count = 0;
-  static int last_packet_count = 0;
-  read_count++;
-  
-  // Periodic logging to monitor communication (DEBUG level only)
-  if (read_count % 5000 == 0)
+  // Note: Parsing happens in background thread (started in on_activate)
+  // We periodically request joint data to keep state fresh (matching driver node)
+  static rclcpp::Time last_joint_request(0, 0, RCL_ROS_TIME);
+  rclcpp::Time now = rclcpp::Clock().now();
+  if ((now - last_joint_request).seconds() >= 0.05)  // Request at 20 Hz (matching driver node)
   {
-    extern int g_total_packets_received;
-    if (g_total_packets_received > last_packet_count)
+    data_parser_control_->acquire_info("joint", false);
+    last_joint_request = now;
+  }
+  
+  // Update state from parser (data is parsed by background thread)
+  auto joint_state = data_parser_control_->get_joint_state();
+  auto velocity_data = data_parser_control_->get_velocity_data();
+  
+  if (joint_state.has_value())
+  {
+    std::lock_guard<std::mutex> lock(data_mutex_);
+    
+    // Update joint positions (first 6 joints)
+    for (size_t i = 0; i < 6 && i < joint_state->angles.size() && i < hw_positions_state_.size(); ++i)
     {
-      int new_packets = g_total_packets_received - last_packet_count;
-      RCLCPP_DEBUG(rclcpp::get_logger("AliciaDHardwareInterface"), 
-                  "Robot responding: %d packets/sec | J1=%.3f rad", 
-                  new_packets, hw_positions_state_.size() > 0 ? hw_positions_state_[0] : 0.0);
-      last_packet_count = g_total_packets_received;
+      hw_positions_state_[i] = joint_state->angles[i];
     }
-    else
+    
+    // Update gripper position (convert from 0-1000 to meters)
+    if (hw_positions_state_.size() > 6)
     {
-      RCLCPP_WARN(rclcpp::get_logger("AliciaDHardwareInterface"), 
-                  "NO packets from robot! Check connection. Total: %d", 
-                  g_total_packets_received);
+      hw_positions_state_[6] = data_parser_control_->gripper_value_to_position(joint_state->gripper);
+    }
+    
+    // Update velocities if available
+    if (velocity_data.has_value() && velocity_data->velocities.size() >= 6)
+    {
+      // Convert from deg/s to rad/s for first 6 joints
+      for (size_t i = 0; i < 6 && i < velocity_data->velocities.size() && i < hw_velocities_state_.size(); ++i)
+      {
+        hw_velocities_state_[i] = velocity_data->velocities[i] * M_PI / 180.0;
+      }
+      // Gripper velocity (if available, otherwise 0)
+      if (hw_velocities_state_.size() > 6)
+      {
+        hw_velocities_state_[6] = 0.0;  // Gripper velocity not typically reported
+      }
     }
   }
 
-  // State interfaces are always available through hw_positions_state_
-  // ros2_control will read them every cycle and publish to /joint_states
   return return_type::OK;
 }
 
 return_type AliciaDHardwareInterface::write(
-  const rclcpp::Time & time, const rclcpp::Duration & period)
+  const rclcpp::Time & /*time*/, const rclcpp::Duration & /*period*/)
 {
-  if (!communicator_ || !communicator_->is_connected())
+  // If hardware is not connected, simulate command acceptance (state will be updated in read())
+  if (!hardware_connected_ || !communicator_ || !communicator_->is_connected() || !data_parser_control_)
   {
-    return return_type::ERROR;
+    // In simulation mode, commands are accepted but not sent to hardware
+    // The read() method will copy commands to state to simulate movement
+    return return_type::OK;
   }
 
+  // Real-time control: send commands every cycle (no rate limiting)
+  // The robot hardware can handle high-frequency commands for smooth real-time control
+  
   std::lock_guard<std::mutex> lock(data_mutex_);
   
-  // Rate limit command sending to match Python SDK behavior (50Hz = 20ms)
-  double elapsed = (time - last_write_time_).seconds();
-  if (elapsed < min_write_period_)
+  // Extract joint angles (first 6 joints)
+  std::vector<double> joint_angles;
+  for (size_t i = 0; i < 6 && i < hw_positions_command_.size(); ++i)
   {
-    return return_type::OK;  // Skip this write, rate limit to 50Hz
+    joint_angles.push_back(hw_positions_command_[i]);
   }
   
-  last_write_time_ = time;
-  
-  static int write_count = 0;
-  static rclcpp::Time last_log_time = rclcpp::Time(0, 0, RCL_ROS_TIME);
-  write_count++;
-  
-  // Initialize on first call
-  if (last_log_time.seconds() == 0.0) {
-    last_log_time = time;
-  }
-  
-  double time_since_log = (time - last_log_time).seconds();
-  if (time_since_log >= 1.0)  // Every second
-  {
-    double actual_rate = write_count / time_since_log;
-    RCLCPP_DEBUG(rclcpp::get_logger("AliciaDHardwareInterface"), 
-                "Write rate: %.1f Hz (expected: %.1f Hz), Commands sent: %d | J1=%.3f rad", 
-                actual_rate, 1.0 / period.seconds(), write_count,
-                hw_positions_command_.size() > 0 ? hw_positions_command_[0] : 0.0);
-    write_count = 0;
-    last_log_time = time;
-  }
-
-  // Build and send servo frame
-  size_t frame_size = servo_count_ * 2 + 5;
-  std::vector<uint8_t> servo_frame(frame_size);
-  servo_frame[0] = FRAME_START_BYTE;
-  servo_frame[1] = CMD_SERVO_CONTROL;
-  servo_frame[2] = servo_count_ * 2;
-
-  for (int i = 0; i < servo_count_; ++i)
-  {
-    uint16_t hw_val = 2048;
-    if (static_cast<size_t>(i) < joint_to_servo_map_index_.size())
-    {
-      int joint_idx = joint_to_servo_map_index_[i];
-      double direction = joint_to_servo_map_direction_[i];
-      
-      // Find the joint in our joints list
-      if (joint_idx < 6 && static_cast<size_t>(joint_idx) < hw_positions_command_.size())
-      {
-        hw_val = rad_to_hardware_value(hw_positions_command_[joint_idx] * direction);
-      }
-    }
-    size_t idx = 3 + i * 2;
-    servo_frame[idx] = hw_val & 0xFF;
-    servo_frame[idx + 1] = (hw_val >> 8) & 0xFF;
-  }
-
-  servo_frame[frame_size - 2] = calculate_checksum(servo_frame);
-  servo_frame[frame_size - 1] = FRAME_END_BYTE;
-  
-  communicator_->write_raw_frame(servo_frame);
-
+  // Extract gripper position and convert to value (0-1000)
+  // -1.0 means use current (matching Python SDK None)
+  double gripper_value = -1.0;
   if (hw_positions_command_.size() > 6)
   {
-    const double stroke_m = (gripper_type_ == "100mm") ? 0.05 : 0.025;
-    double m = std::max(0.0, std::min(stroke_m, hw_positions_command_[6]));
-
-    const double gripper_threshold = 0.001; // meters
-    bool should_send = (last_sent_gripper_ < 0.0) || (std::abs(m - last_sent_gripper_) >= gripper_threshold);
-
-    if (should_send)
+    gripper_value = data_parser_control_->gripper_position_to_value(hw_positions_command_[6]);
+  }
+  
+  // Extract single speed value from velocities (matching Python SDK: single speed for all joints)
+  // Use the maximum absolute velocity if provided, otherwise use default
+  bool has_velocity_command = false;
+  double max_abs_vel_deg_s = 0.0;
+  if (hw_velocities_command_.size() >= 6)
+  {
+    for (size_t i = 0; i < 6; ++i)
     {
-      last_sent_gripper_ = m;
-      last_gripper_send_time_ = time;
-
-      if (firmware_new_)
+      double vel_rad_s = hw_velocities_command_[i];
+      double abs_vel_deg_s = std::abs(vel_rad_s) * 180.0 / M_PI;
+      if (abs_vel_deg_s > 1e-6)
       {
-      std::vector<uint8_t> gripper_frame(11);
-      gripper_frame[0] = FRAME_START_BYTE;
-      gripper_frame[1] = CMD_GRIPPER_CONTROL;
-      gripper_frame[2] = 6;
-      gripper_frame[3] = 1;
-      uint16_t target = rad_to_hardware_value_grip(m);
-      gripper_frame[4] = 3400 & 0xFF;
-      gripper_frame[5] = (3400 >> 8) & 0xFF;
-      gripper_frame[6] = target & 0xFF;
-      gripper_frame[7] = (target >> 8) & 0xFF;
-      gripper_frame[8] = 254;
-      gripper_frame[9] = calculate_checksum(gripper_frame);
-      gripper_frame[10] = FRAME_END_BYTE;
-      
-      communicator_->write_raw_frame(gripper_frame);
-      }
-      else
-      {
-        std::vector<uint8_t> gripper_frame(8);
-        gripper_frame[0] = FRAME_START_BYTE;
-        gripper_frame[1] = CMD_GRIPPER_CONTROL;
-        gripper_frame[2] = 3;
-        gripper_frame[3] = 1;
-        uint16_t target = rad_to_hardware_value_grip(m);
-        gripper_frame[4] = target & 0xFF;
-        gripper_frame[5] = (target >> 8) & 0xFF;
-        gripper_frame[6] = calculate_checksum(gripper_frame);
-        gripper_frame[7] = FRAME_END_BYTE;
-        
-        communicator_->write_raw_frame(gripper_frame);
+        has_velocity_command = true;
+        // Use maximum absolute velocity as the common speed for all joints (matching Python SDK)
+        max_abs_vel_deg_s = std::max(max_abs_vel_deg_s, abs_vel_deg_s);
       }
     }
-
   }
+  
+  // Use default speed if no velocity command provided, otherwise use maximum velocity
+  double speed_deg_s = default_speed_rad_s_ * 180.0 / M_PI;
+  if (has_velocity_command)
+  {
+    speed_deg_s = max_abs_vel_deg_s;
+  }
+  
+  // Use unified set_joint_and_gripper method (matching Python SDK)
+  // Joint and gripper are controlled in one frame with single speed for all joints
+  data_parser_control_->set_joint_and_gripper(joint_angles, gripper_value, speed_deg_s);
 
   return return_type::OK;
 }
 
-// Global counter for cross-function tracking
-int g_total_packets_received = 0;
-
-void AliciaDHardwareInterface::process_serial_data()
-{
-  std::vector<uint8_t> packet;
-  
-  static int packet_count = 0;
-  static int unknown_count = 0;
-  static int servo_count_received = 0;
-  static int gripper_count_received = 0;
-  
-  // Process all available packets in the queue
-  while (communicator_->get_packet(packet))
-  {
-    if (packet.empty())
-    {
-      continue;
-    }
-
-    packet_count++;
-    g_total_packets_received++;
-    
-    // Full frame format: AA CMD LEN DATA... CHK FF
-    // packet[0] = AA, packet[1] = CMD, packet[2] = LEN
-    if (packet.empty() || packet[0] != FRAME_START_BYTE)
-    {
-      RCLCPP_WARN(rclcpp::get_logger("AliciaDHardwareInterface"), 
-                  "Invalid packet: missing frame start byte");
-      continue;
-    }
-    
-    uint8_t command_id = packet[1];  // Command is at index 1 (after AA)
-    
-
-
-    if (packet_count % 100 == 0)
-    {
-      RCLCPP_DEBUG(rclcpp::get_logger("AliciaDHardwareInterface"), 
-                  "Packets: total=%d, servo=%d, gripper=%d, unknown=%d", 
-                  packet_count, servo_count_received, gripper_count_received, unknown_count);
-    }
-
-    // Extract data payload: includes LEN byte to match parse function expectations
-    // Frame format: AA CMD LEN DATA CHK FF
-    // Parse functions expect: LEN DATA...
-    std::vector<uint8_t> data_payload;
-    if (packet.size() >= 4)
-    {
-      uint8_t data_len = packet[2];
-      if (packet.size() >= (size_t)3 + data_len + 2)  // AA CMD LEN DATA CHK FF
-      {
-        // Payload includes LEN byte: from index 2 (LEN) to index 2+LEN (before checksum)
-        data_payload.assign(packet.begin() + 2, packet.begin() + 3 + data_len);
-      }
-    }
-
-    switch (command_id)
-    {
-      case FEEDBACK_SERVO_STATE:
-      case FEEDBACK_SERVO_STATE_V6:
-        servo_count_received++;
-        parse_servo_states_frame(data_payload);
-        break;
-      case FEEDBACK_GRIPPER_STATE:
-      case FEEDBACK_GRIPPER_STATE_V6:
-        gripper_count_received++;
-        parse_gripper_state_frame(data_payload);
-        break;
-      case FEEDBACK_ERROR:
-        parse_error_frame(data_payload);
-        break;
-      case FEEDBACK_VERSION:
-        parse_version_frame(packet);  
-        break;
-      default:
-        unknown_count++;
-        // Log first few unknown frames for debugging
-        if (unknown_count <= 10)
-        {
-          RCLCPP_WARN(rclcpp::get_logger("AliciaDHardwareInterface"), 
-                      "Unknown command ID: 0x%02X, packet_size=%zu", 
-                      command_id, packet.size());
-        }
-        break;
-    }
-  }
-}
-
-void AliciaDHardwareInterface::parse_servo_states_frame(const std::vector<uint8_t>& data_payload)
-{
-  if (data_payload.empty())
-  {
-    return;
-  }
-
-  uint8_t data_byte_count = data_payload[0];
-  if (data_payload.size() < (size_t)data_byte_count + 1)
-  {
-    return;
-  }
-
-  int servos_in_frame = data_byte_count / 2;
-
-  std::lock_guard<std::mutex> lock(data_mutex_);
-
-  static int parse_count = 0;
-  parse_count++;
-  if (parse_count % 50 == 0)  // Log every 50 frames (~1 second at 50Hz)
-  {
-    RCLCPP_DEBUG(rclcpp::get_logger("AliciaDHardwareInterface"), 
-                "Receiving servo states: %d servos, J1=%.3f rad", 
-                servos_in_frame, hw_positions_state_.size() > 0 ? hw_positions_state_[0] : 0.0);
-  }
-
-  for (int i = 0; i < servos_in_frame && i < servo_count_; ++i)
-  {
-    size_t data_idx = 1 + i * 2;
-    if (data_idx + 1 >= data_payload.size()) break;
-    
-    uint16_t hw_val = data_payload[data_idx] | (data_payload[data_idx + 1] << 8);
-    double rad_val = hardware_value_to_rad(hw_val);
-
-    if (static_cast<size_t>(i) < servo_to_joint_map_index_.size())
-    {
-      int joint_idx = servo_to_joint_map_index_[i];
-      if (joint_idx != -1 && static_cast<size_t>(joint_idx) < hw_positions_state_.size())
-      {
-        hw_positions_state_[joint_idx] = rad_val * servo_to_joint_map_direction_[i];
-      }
-    }
-  }
-}
-
-void AliciaDHardwareInterface::parse_gripper_state_frame(const std::vector<uint8_t>& data_payload)
-{
-  if (data_payload.size() < 8)
-  {
-    return;
-  }
-
-  uint16_t gripper_hw_val = data_payload[2] | (data_payload[3] << 8);
-  
-  std::lock_guard<std::mutex> lock(data_mutex_);
-  current_gripper_position_m_ = hardware_value_to_rad_grip(gripper_hw_val);
-  
-  if (hw_positions_state_.size() > 6)
-  {
-    hw_positions_state_[6] = current_gripper_position_m_;
-  }
-}
-
-void AliciaDHardwareInterface::parse_error_frame(const std::vector<uint8_t>& payload)
-{
-  if (payload.size() < 2)
-  {
-    return;
-  }
-  uint8_t error_type = payload[0];
-  uint8_t error_param = payload[1];
-  RCLCPP_ERROR(rclcpp::get_logger("AliciaDHardwareInterface"), 
-               "Received Error Frame from Hardware: Type=0x%02X, Param=0x%02X", 
-               error_type, error_param);
-}
-
-void AliciaDHardwareInterface::parse_version_frame(const std::vector<uint8_t>& full_frame)
-{
-  if (firmware_version_detected_) return;
-  
-  // Full frame format: AA CMD LEN major minor patch ... CHK FF
-  // Python SDK accesses frame[3], frame[4], frame[5] for version
-  // So: frame[0]=AA, frame[1]=CMD, frame[2]=LEN, frame[3]=major, frame[4]=minor, frame[5]=patch
-  if (full_frame.size() < 6) 
-  {
-    RCLCPP_WARN(rclcpp::get_logger("AliciaDHardwareInterface"), 
-                "Version frame too short: %zu bytes (expected at least 6)", full_frame.size());
-    return;
-  }
-  
-  // Extract version from indices 3, 4, 5 (matching Python SDK)
-  uint8_t major = full_frame[3];
-  uint8_t minor = full_frame[4];
-  uint8_t patch = full_frame[5];
-  
-  char buf[16];
-  snprintf(buf, sizeof(buf), "%d.%d.%d", major, minor, patch);
-  firmware_version_ = std::string(buf);
-  firmware_new_ = (major >= 6);
-  firmware_version_detected_ = true;
-  
-  RCLCPP_INFO(rclcpp::get_logger("AliciaDHardwareInterface"), 
-              "Firmware version detected: %s (V6+=%s)", 
-              firmware_version_.c_str(), firmware_new_ ? "true" : "false");
-}
-
-void AliciaDHardwareInterface::send_firmware_query()
-{
-  if (!communicator_ || !communicator_->is_connected()) return;
-  
-  // Version query frame format matching Python SDK: AA 0A 01 00 00 FF
-  // Frame: AA CMD LEN DATA CHK FF
-  // For simple query: LEN=1, DATA=0x00, CHK=0x00 (sum of payload=0, mod 2 = 0)
-  std::vector<uint8_t> frame(6);
-  frame[0] = FRAME_START_BYTE;  // AA
-  frame[1] = CMD_VERSION_QUERY; // 0x0A
-  frame[2] = 0x01;              // Length = 1
-  frame[3] = 0x00;              // Data byte
-  frame[4] = 0x00;              // Checksum (0x00 mod 2 = 0)
-  frame[5] = FRAME_END_BYTE;    // FF
-  
-  RCLCPP_DEBUG(rclcpp::get_logger("AliciaDHardwareInterface"), 
-               "Sending firmware version query: AA 0A 01 00 00 FF");
-  communicator_->write_raw_frame(frame);
-}
-
-
-void AliciaDHardwareInterface::set_speed(double speed_rad_s)
-{
-  if (!communicator_ || !communicator_->is_connected())
-  {
-    RCLCPP_WARN(rclcpp::get_logger("AliciaDHardwareInterface"), 
-                "Cannot set speed: not connected");
-    return;
-  }
-
-  // Convert rad/s to hardware speed value (1-3400)
-  // Based on Python SDK: max_angle_rad_per_sec = 2*pi, max_speed_value = 3400
-  const double max_angle_rad_per_sec = 2.0 * M_PI;
-  const double max_speed_value = 3400.0;
-  double raw_speed = (speed_rad_s / max_angle_rad_per_sec) * max_speed_value;
-  int speed_value = std::max(1, std::min(3400, static_cast<int>(raw_speed)));
-
-  // Build speed control frame: [START, CMD_SPEED, length, 0x2E, speed_bytes...]
-  // Speed command format: 0x2E + speed value (2 bytes) for each of 10 servos
-  std::vector<uint8_t> frame(26);  // 5 header + 0x2E + 10 servos * 2 bytes = 26
-  frame[0] = FRAME_START_BYTE;
-  frame[1] = CMD_SPEED;
-  frame[2] = 21;  // Data length: 1 (0x2E) + 10 servos * 2 = 21
-  frame[3] = 0x2E;  // Speed control byte
-  
-  // Fill speed value for all 10 servos
-  for (int i = 0; i < 10; ++i)
-  {
-    size_t idx = 4 + i * 2;
-    frame[idx] = speed_value & 0xFF;         // Low byte
-    frame[idx + 1] = (speed_value >> 8) & 0xFF; // High byte
-  }
-  
-  frame[24] = calculate_checksum(frame);
-  frame[25] = FRAME_END_BYTE;
-  
-  communicator_->write_raw_frame(frame);
-  
-  RCLCPP_INFO(rclcpp::get_logger("AliciaDHardwareInterface"), 
-              "Speed set: %.3f rad/s (%.1f deg/s) -> hardware value: %d", 
-              speed_rad_s, speed_rad_s * 180.0 / M_PI, speed_value);
-}
-
-uint16_t AliciaDHardwareInterface::rad_to_hardware_value(double angle_rad)
-{
-  double angle_deg = angle_rad * 180.0 / M_PI;
-  angle_deg = std::max(-180.0, std::min(180.0, angle_deg));
-  int value = static_cast<int>((angle_deg + 180.0) / 360.0 * 4096.0);
-  return std::max(0, std::min(4095, value));
-}
-
-uint16_t AliciaDHardwareInterface::rad_to_hardware_value_grip(double gripper_m)
-{
-  // Direct meters mapping: 0m (open) -> 2048, stroke_m (closed) -> gripper_hw_max
-  constexpr double GRIPPER_HW_MIN = 2048.0;  // Fully open (common for all gripper types)
-  const double gripper_hw_max = (gripper_type_ == "100mm") ? 3600.0 : 3290.0;
-  const double stroke_m = (gripper_type_ == "100mm") ? 0.05 : 0.025;
-
-  double m = std::max(0.0, std::min(stroke_m, gripper_m));
-  double t = (stroke_m > 1e-9) ? (m / stroke_m) : 0.0;
-  const double hw_value = GRIPPER_HW_MIN + t * (gripper_hw_max - GRIPPER_HW_MIN);
-  const int hardware_value = static_cast<int>(std::round(hw_value));
-  RCLCPP_DEBUG(rclcpp::get_logger("AliciaDHardwareInterface"), "hardware_value: %d", hardware_value);
-  RCLCPP_DEBUG(rclcpp::get_logger("AliciaDHardwareInterface"), "gripper_hw_max: %f", gripper_hw_max);
-  RCLCPP_DEBUG(rclcpp::get_logger("AliciaDHardwareInterface"), "stroke_m: %f", stroke_m);
-  RCLCPP_DEBUG(rclcpp::get_logger("AliciaDHardwareInterface"), "m: %f", m);
-  RCLCPP_DEBUG(rclcpp::get_logger("AliciaDHardwareInterface"), "t: %f", t);
-  RCLCPP_DEBUG(rclcpp::get_logger("AliciaDHardwareInterface"), "hw_value: %f", hw_value);
-  return std::max(static_cast<int>(GRIPPER_HW_MIN), std::min(static_cast<int>(gripper_hw_max), hardware_value));
-}
-
-double AliciaDHardwareInterface::hardware_value_to_rad(uint16_t hw_value)
-{
-  hw_value = std::max(0, std::min(4095, (int)hw_value));
-  double angle_deg = -180.0 + (static_cast<double>(hw_value) / 4095.0) * 360.0;
-  return angle_deg * M_PI / 180.0;
-}
-
-double AliciaDHardwareInterface::hardware_value_to_rad_grip(uint16_t hw_value)
-{
-  // Direct mapping from hardware counts to meters
-  // 2048 (open) -> 0.0 m, gripper_hw_max (closed) -> stroke_m
-  constexpr double GRIPPER_HW_MIN = 2048.0;  // Fully open (common for all gripper types)
-  const double gripper_hw_max = (gripper_type_ == "100mm") ? 3600.0 : 3290.0;
-  const double stroke_m = (gripper_type_ == "100mm") ? 0.05 : 0.025;
-
-  int clamped = std::max(static_cast<int>(GRIPPER_HW_MIN), std::min(static_cast<int>(gripper_hw_max), static_cast<int>(hw_value)));
-  double t = (gripper_hw_max > GRIPPER_HW_MIN) ? ((static_cast<double>(clamped) - GRIPPER_HW_MIN) / (gripper_hw_max - GRIPPER_HW_MIN)) : 0.0;
-  double gripper_m = t * stroke_m;
-  return gripper_m; // meters (prismatic joint)
-}
-
-uint8_t AliciaDHardwareInterface::calculate_checksum(const std::vector<uint8_t>& frame_data)
-{
-  if (frame_data.size() < 4)
-  {
-    return 0;
-  }
-  
-  const uint8_t payload_len = frame_data[2];
-
-  if (frame_data.size() < (size_t)3 + payload_len)
-  {
-    return 0;
-  }
-
-  int sum = std::accumulate(frame_data.begin() + 3, 
-                            frame_data.begin() + 3 + payload_len, 
-                            0);
-
-  return static_cast<uint8_t>(sum % 2);
-}
-
-std::vector<uint8_t> AliciaDHardwareInterface::generate_simple_frame(
-  uint8_t command, uint8_t data, bool use_checksum)
-{
-  std::vector<uint8_t> frame(6);
-  frame[0] = FRAME_START_BYTE;
-  frame[1] = command;
-  frame[2] = 0x01;
-  frame[3] = data & 0xFF;
-
-  if (use_checksum)
-  {
-    frame[4] = data % 2;
-  }
-  else
-  {
-    frame[4] = 0x00;
-  }
-
-  frame[5] = FRAME_END_BYTE;
-  return frame;
-}
 
 }  // namespace alicia_d_driver
 
