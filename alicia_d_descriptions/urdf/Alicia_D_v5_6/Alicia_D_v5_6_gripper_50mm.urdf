@@ -446,7 +446,7 @@
     </collision>
   </link>
   <joint
-    name="left_finger"
+    name="Gripper"
     type="prismatic">
     <origin
       xyz="0.0002 -0.0255 0.13098"
@@ -462,7 +462,7 @@
       upper="0.025"
       effort="5"
       velocity="12" />
-    <mimic joint="Gripper" multiplier="-1" offset="0"/>
+    
   </joint>
   <link
     name="right_gripper">
@@ -505,7 +505,7 @@
     </collision>
   </link>
   <joint
-    name="Gripper"
+    name="right_finger"
     type="prismatic">
     <origin
       xyz="0.0002 0.0255 0.13098"
@@ -521,6 +521,7 @@
       upper="0"
       effort="5"
       velocity="12" />
+    <mimic joint="Gripper" multiplier="-1" offset="0"/>
   </joint>
   <link
     name="gripper_center">

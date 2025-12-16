@@ -26,9 +26,11 @@ CallbackReturn AliciaDHardwareInterface::on_init(
   gripper_type_param_ = info_.hardware_parameters.count("gripper_type") ? 
                          info_.hardware_parameters["gripper_type"] : "50mm";
   
-  // Speed control parameter (default ~20 deg/s = 0.349 rad/s)
-  default_speed_rad_s_ = info_.hardware_parameters.count("default_speed_rad_s") ? 
-                         std::stod(info_.hardware_parameters["default_speed_rad_s"]) : 0.349;
+  // Speed control parameter (default 20.0 deg/s)
+  default_speed_deg_s_ = info_.hardware_parameters.count("default_speed_deg_s") ? 
+                         std::stod(info_.hardware_parameters["default_speed_deg_s"]) : 20.0;
+  RCLCPP_INFO(rclcpp::get_logger("AliciaDHardwareInterface"), 
+              "Default speed configured: %.1f deg/s", default_speed_deg_s_);
 
   // Initialize state and command vectors
   hw_positions_state_.resize(info_.joints.size(), 0.0);
@@ -184,10 +186,6 @@ return_type AliciaDHardwareInterface::read(
     return return_type::OK;
   }
 
-  // Note: Parsing happens in background thread (started in on_activate).
-  // We periodically request joint data to keep state fresh (matching driver node).
-  // Use a steady clock so time differences are computed with a consistent
-  // time source, matching controller_manager's use of steady time.
   static rclcpp::Clock steady_clock(RCL_STEADY_TIME);
   static rclcpp::Time last_joint_request(0, 0, RCL_STEADY_TIME);
   rclcpp::Time now = steady_clock.now();
@@ -252,6 +250,15 @@ return_type AliciaDHardwareInterface::write(
   
   std::lock_guard<std::mutex> lock(data_mutex_);
   
+  // Log once when we start sending commands (first call after initialization)
+  static bool first_write = true;
+  if (first_write)
+  {
+    RCLCPP_INFO(rclcpp::get_logger("AliciaDHardwareInterface"),
+                "Starting to send joint commands with speed: %.1f deg/s", default_speed_deg_s_);
+    first_write = false;
+  }
+  
   // Extract joint angles (first 6 joints)
   std::vector<double> joint_angles;
   for (size_t i = 0; i < 6 && i < hw_positions_command_.size(); ++i)
@@ -267,30 +274,23 @@ return_type AliciaDHardwareInterface::write(
     gripper_value = data_parser_control_->gripper_position_to_value(hw_positions_command_[6]);
   }
   
-  // Extract single speed value from velocities (matching Python SDK: single speed for all joints)
-  // Use the maximum absolute velocity if provided, otherwise use default
-  bool has_velocity_command = false;
-  double max_abs_vel_deg_s = 0.0;
-  if (hw_velocities_command_.size() >= 6)
-  {
-    for (size_t i = 0; i < 6; ++i)
-    {
-      double vel_rad_s = hw_velocities_command_[i];
-      double abs_vel_deg_s = std::abs(vel_rad_s) * 180.0 / M_PI;
-      if (abs_vel_deg_s > 1e-6)
-      {
-        has_velocity_command = true;
-        // Use maximum absolute velocity as the common speed for all joints (matching Python SDK)
-        max_abs_vel_deg_s = std::max(max_abs_vel_deg_s, abs_vel_deg_s);
-      }
-    }
-  }
+  // Always use default_speed_deg_s to ensure user's speed_deg_s parameter is respected
+  // MoveIt's velocity commands are ignored - the speed_deg_s parameter controls the actual speed
+  // This ensures consistent behavior: setting speed_deg_s=40 will always use 40 deg/s
+  // Note: MoveIt may provide velocity commands in trajectories, but we ignore them to respect
+  // the user's explicit speed setting via the speed_deg_s launch parameter
+  double speed_deg_s = default_speed_deg_s_;
   
-  // Use default speed if no velocity command provided, otherwise use maximum velocity
-  double speed_deg_s = default_speed_rad_s_ * 180.0 / M_PI;
-  if (has_velocity_command)
+  // Periodic logging to verify speed is being used (log every 2000 calls = ~10 seconds at 200Hz)
+  // or when speed changes significantly
+  static int write_count = 0;
+  static double last_logged_speed = -1.0;
+  write_count++;
+  if (write_count % 2000 == 0 || std::abs(speed_deg_s - last_logged_speed) > 1.0)
   {
-    speed_deg_s = max_abs_vel_deg_s;
+    RCLCPP_INFO(rclcpp::get_logger("AliciaDHardwareInterface"),
+                "Sending joint command with speed: %.1f deg/s", speed_deg_s);
+    last_logged_speed = speed_deg_s;
   }
   
   // Use unified set_joint_and_gripper method (matching Python SDK)

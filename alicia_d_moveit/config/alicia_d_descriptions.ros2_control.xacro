@@ -4,7 +4,7 @@
                  hw_port:=
                  hw_debug_mode:=false 
                  hw_gripper_type:=50mm 
-                 hw_default_speed_rad_s:=0.349">
+                 hw_default_speed_deg_s:=20.0">
         <xacro:property name="initial_positions" value="${xacro.load_yaml(initial_positions_file)['initial_positions']}"/>
 
         <ros2_control name="${name}" type="system">
@@ -12,7 +12,7 @@
                 <plugin>alicia_d_driver/AliciaDHardwareInterface</plugin>
                 <param name="port">${hw_port}</param>
                 <param name="gripper_type">${hw_gripper_type}</param>
-                <param name="default_speed_rad_s">${hw_default_speed_rad_s}</param>
+                <param name="default_speed_deg_s">${hw_default_speed_deg_s}</param>
             </hardware>
             <joint name="Joint1">
                 <command_interface name="position"/>

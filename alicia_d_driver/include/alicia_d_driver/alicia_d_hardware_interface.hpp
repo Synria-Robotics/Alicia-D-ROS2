@@ -62,7 +62,7 @@ private:
   std::mutex data_mutex_;
   
   // Speed control
-  double default_speed_rad_s_;  // Default speed in rad/s (~20 deg/s = 0.349 rad/s)
+  double default_speed_deg_s_;  // Default speed in deg/s (default: 20.0 deg/s)
   
   // Command rate limiting (disabled for real-time control)
   rclcpp::Time last_write_time_;

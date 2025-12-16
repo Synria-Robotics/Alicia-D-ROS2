@@ -4,7 +4,7 @@
     <xacro:arg name="hw_port" default="" />
     <xacro:arg name="hw_debug_mode" default="false" />
     <xacro:arg name="hw_gripper_type" default="100mm" />
-    <xacro:arg name="hw_default_speed_rad_s" default="0.349" />
+    <xacro:arg name="hw_default_speed_deg_s" default="20.0" />
 
     <!-- Import alicia_d_descriptions urdf file for v5_6 100mm -->
     <xacro:include filename="$(find alicia_d_descriptions)/urdf/Alicia_D_v5_6/Alicia_D_v5_6_gripper_100mm.urdf" />
@@ -18,7 +18,7 @@
         initial_positions_file="$(arg initial_positions_file)"
         hw_port="$(arg hw_port)"
         hw_gripper_type="$(arg hw_gripper_type)"
-        hw_default_speed_rad_s="$(arg hw_default_speed_rad_s)"/>
+        hw_default_speed_deg_s="$(arg hw_default_speed_deg_s)"/>
 
 </robot>
 

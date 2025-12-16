@@ -470,7 +470,6 @@ bool AliciaDDataParserControl::set_joint_and_gripper(const std::vector<double>& 
         RCLCPP_ERROR(logger_, "Speed must be positive: %.2f deg/s", speed_deg_s);
         return false;
     }
-
     std::vector<uint8_t> frame = build_joint_frame(joint_angles, gripper_value, speed_deg_s);
     
     if (debug_mode_) {

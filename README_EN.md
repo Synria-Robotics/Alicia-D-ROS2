@@ -64,7 +64,7 @@ sudo usermod -a -G dialout $USER
 
 Or temporarily:
 ```bash
-sudo chmod 666 /dev/ttyCH341USB0
+sudo chmod 666 /dev/ttyACM0
 ```
 
 ### 2. Get Source Code and Build
@@ -72,9 +72,9 @@ sudo chmod 666 /dev/ttyCH341USB0
 ```bash
 mkdir -p ~/alicia_ws/src
 cd ~/alicia_ws
-git clone https://github.com/Synria-Robotics/Alicia-D-ROS2.git -b v6.0.0 ./src
+git clone https://github.com/Synria-Robotics/Alicia-D-ROS2.git -b v6.1.0 ./src
 rosdep install --from-paths src --ignore-src -r -y
-colcon build --packages-select alicia_d_driver alicia_d_moveit
+colcon build
 source install/setup.bash
 ```
 
@@ -87,54 +87,27 @@ ros2 launch alicia_d_moveit real_robot.launch.py
 **With custom parameters:**
 ```bash
 ros2 launch alicia_d_moveit real_robot.launch.py \
-    robot_version:=v5_6 \
     gripper_type:=100mm \
-    port:=/dev/ttyCH341USB0 \
-    baud_rate:=1000000 \
-    firmware_version:=auto
+    port:=/dev/ttyACM0 \
+    speed_deg_s:=30
 ```
 
 ## Usage
 
-### Launch File Parameters
+### MoveIt Launch File Parameters
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `robot_version` | `v5_6` | Robot version (`v5_5` or `v5_6`) |
 | `gripper_type` | `50mm` | Gripper stroke (`50mm` or `100mm`) |
-| `port` | `/dev/ttyUSB0` | Serial port device |
-| `baud_rate` | `1000000` | Serial baud rate |
-| `firmware_version` | `auto` | Firmware version (`5.0.0`, `6.0.0`, or `auto` for auto-detection) |
+| `port` | `''` (empty string) | Serial port device path, e.g., `/dev/ttyACM0`. Leave empty for auto-detection |
+| `speed_deg_s` | `20` | Default speed for joint movements (degrees per second) |
 
-### Launch Options
+### Standalone Driver Launch File Parameters
 
-#### Option 1: Real Robot with MoveIt (Recommended)
-
-```bash
-ros2 launch alicia_d_moveit real_robot.launch.py \
-    robot_version:=v5_6 \
-    gripper_type:=50mm \
-    port:=/dev/ttyCH341USB0 \
-    baud_rate:=1000000 \
-    firmware_version:=auto
-```
-
-#### Option 2: Simulation Only (No Hardware)
-
-```bash
-ros2 launch alicia_d_moveit demo.launch.py \
-    robot_version:=v5_6 \
-    gripper_type:=50mm
-```
-
-#### Option 3: Standalone Driver (No MoveIt)
-
-```bash
-ros2 launch alicia_d_driver alicia_d_driver.launch.py \
-    port:=/dev/ttyCH343USB0 \
-    gripper_type:=100mm \
-    firmware_version:=6.0.0
-```
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `port` | `''` (empty string) | Serial port device path, e.g., `/dev/ttyACM0`. Leave empty for auto-detection |
+| `default_speed_deg_s` | `20.0` | Default speed for joint movements (degrees per second), range: 4.39-439.45 |
 
 ### Using MoveIt in RViz
 
@@ -142,40 +115,7 @@ ros2 launch alicia_d_driver alicia_d_driver.launch.py \
 2. **Plan Motion**: Click "Plan" button
 3. **Execute Motion**: Click "Execute" or "Plan & Execute"
 
-## Special Commands
-
-Running the following command:
-```
-ros2 launch alicia_d_driver alicia_d_driver.launch.py port:=/dev/ttyUSB0 gripper_type:=100mm firmware_version:=6.0.0
-```
-
-
-
-### Enable Hand-Guiding Mode (Zero Torque)
-
-```bash
-ros2 topic pub --once /demonstration std_msgs/msg/Bool "{data: true}"
-```
-
-### Disable Hand-Guiding (Restore Torque)
-
-```bash
-ros2 topic pub --once /demonstration std_msgs/msg/Bool "{data: false}"
-```
-
-### Zero Calibration
-
-Step 1: Disable torque
-```bash
-ros2 topic pub --once /demonstration std_msgs/msg/Bool "{data: true}"
-```
-
-Step 2: Place the robot to desired pose
-
-Step 3: Execute calibration
-```bash
-ros2 topic pub --once /zero_calibrate std_msgs/msg/Bool "{data: true}"
-```
+For detailed usage examples, see [Basic Usage Guide](docs/Basic_usage_EN.md).
 
 ## Troubleshooting
 
@@ -205,27 +145,17 @@ ros2 topic pub --once /zero_calibrate std_msgs/msg/Bool "{data: true}"
 **Solutions**:
 1. Verify firmware version is detected correctly (check logs)
 2. Ensure gripper type matches your hardware (50mm vs 100mm)
-3. Monitor serial communication with `debug_mode:=true`
-4. Try specifying firmware version explicitly: `firmware_version:=5.0.0`
+3. Check that the `speed_deg_s` parameter is set appropriately (default: 20 deg/s)
+4. Monitor serial communication with `debug_mode:=true`
 
 ## Documentation
 
 For detailed documentation, see:
 
-*   [Complete User Guide](README_EN.md) - Detailed installation, configuration, and usage instructions
+*   [Basic Usage Guide](docs/Basic_usage_EN.md) - Complete usage examples and API reference
 *   [MoveIt 2 Documentation](https://moveit.picknik.ai/main/index.html)
 *   [ros2_control Documentation](https://control.ros.org/)
 *   [ROS2 Humble Documentation](https://docs.ros.org/en/humble/)
-
-## Architecture
-
-```
-MoveIt → Joint Trajectory Controllers → ros2_control → Hardware Interface → Serial → Robot
-                                                ↓
-                                        Joint State Publisher
-                                                ↓
-                                           /joint_states
-```
 
 ## Safety Notes
 

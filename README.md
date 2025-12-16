@@ -46,7 +46,7 @@ alicia_d_driver/
 
 ## 快速开始
 
-### 1. 设置串口权限（一次性）
+### 1. 设置串口权限（永久性）
 
 ```bash
 sudo usermod -a -G dialout $USER
@@ -72,6 +72,22 @@ source install/setup.bash
 
 ### 3. 启动真实机械臂
 
+#### 使用 MoveIt（推荐）
+
+```bash
+ros2 launch alicia_d_moveit real_robot.launch.py
+```
+
+**自定义参数：**
+```bash
+ros2 launch alicia_d_moveit real_robot.launch.py \
+    gripper_type:=100mm \
+    port:=/dev/ttyACM0 \
+    speed_deg_s:=30
+```
+
+#### 独立驱动（无 MoveIt）
+
 ```bash
 ros2 launch alicia_d_driver alicia_d_driver.launch.py
 ```
@@ -79,51 +95,22 @@ ros2 launch alicia_d_driver alicia_d_driver.launch.py
 
 ## 使用方法
 
-### Launch 文件参数
+### MoveIt Launch 文件参数
 
 | 参数 | 默认值 | 说明 |
 |-----------|---------|-------------|
-| `robot_version` | `v5_6` | 机械臂版本 (`v5_5` 或 `v5_6`) |
 | `gripper_type` | `50mm` | 夹爪行程 (`50mm` 或 `100mm`) |
-| `port` | `/dev/ttyACM0` | 串口设备 |
-### 启动选项
+| `port` | `''` (空字符串) | 串口设备路径，如 `/dev/ttyACM0`。留空则自动检测 |
+| `speed_deg_s` | `20` | 关节运动的默认速度（度/秒） |
 
+### 独立驱动 Launch 文件参数
 
+| 参数 | 默认值 | 说明 |
+|-----------|---------|-------------|
+| `port` | `''` (空字符串) | 串口设备路径，如 `/dev/ttyACM0`。留空则自动检测 |
+| `default_speed_deg_s` | `20.0` | 关节运动的默认速度（度/秒），范围：4.39-439.45 |
 
-#### 选项 3：独立驱动（无 MoveIt）
-
-```bash
-ros2 launch alicia_d_driver alicia_d_driver.launch.py \
-    port:=/dev/ttyACM0 \
-    gripper_type:=100mm \
-```
-
-
-### 使能手引导模式（零力矩）
-
-```bash
-ros2 topic pub --once /demonstration std_msgs/msg/Bool "{data: true}"
-```
-
-### 禁用手引导（恢复全力矩）
-
-```bash
-ros2 topic pub --once /demonstration std_msgs/msg/Bool "{data: false}"
-```
-
-### 零位校准
-
-步骤 1：禁用力矩
-```bash
-ros2 topic pub --once /demonstration std_msgs/msg/Bool "{data: true}"
-```
-
-步骤 2：将机械臂放置到期望的姿势
-
-步骤 3：执行校准
-```bash
-ros2 topic pub --once /zero_calibrate std_msgs/msg/Bool "{data: true}"
-```
+详细使用示例请参阅 [使用指南](docs/Basic_usage.md)。
 
 ## 故障排除
 
@@ -159,7 +146,7 @@ ros2 topic pub --once /zero_calibrate std_msgs/msg/Bool "{data: true}"
 
 详细文档请参阅：
 
-*   [完整使用指南](README_EN.md) - 详细的安装、配置和使用说明
+*   [使用指南](docs/Basic_usage.md) - 完整的使用示例和 API 参考
 *   [MoveIt 2 文档](https://moveit.picknik.ai/main/index.html)
 *   [ros2_control 文档](https://control.ros.org/)
 *   [ROS2 Humble 文档](https://docs.ros.org/en/humble/)

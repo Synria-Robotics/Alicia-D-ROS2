@@ -88,7 +88,6 @@ public:
     std::optional<VelocityData> get_velocity_data() const;
     std::optional<SelfCheckData> get_self_check_data() const;
 
-    // Servo Driver - Command sending (matching servo_driver.py)
     bool acquire_info(const std::string& info_type, bool wait = false, 
                      double timeout = 2.0, double retry_interval = 0.2);
     bool set_joint_and_gripper(const std::vector<double>& joint_angles = {},

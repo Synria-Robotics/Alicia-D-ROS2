@@ -16,22 +16,22 @@ from moveit_config_builder import get_versioned_moveit_config
 def launch_setup(context, *args, **kwargs):
     """Setup real robot launch with versioned config."""
     # Get launch configuration values
-    robot_version = LaunchConfiguration('robot_version').perform(context)
     gripper_type = LaunchConfiguration('gripper_type').perform(context)
     port = LaunchConfiguration('port').perform(context)
+    speed_deg_s = float(LaunchConfiguration('speed_deg_s').perform(context))
     
     # Validate gripper type
     if gripper_type not in ["50mm", "100mm"]:
         print(f'\033[1;33m[WARN] Invalid gripper_type: {gripper_type}, using default: 50mm\033[0m')
         gripper_type = "50mm"
     
-    print(f'\033[1;32m[INFO] Launching REAL ROBOT control with version: {robot_version}\033[0m')
     print(f'\033[1;32m[INFO] Serial port: {port if port else "(auto-detect)"}\033[0m')
     print(f'\033[1;32m[INFO] Gripper type: {gripper_type}\033[0m')
+    print(f'\033[1;32m[INFO] Speed: {speed_deg_s} deg/s\033[0m')
     print(f'\033[1;33m[INFO] Real robot mode: Hardware connection required\033[0m')
     
-    # Get versioned MoveIt config with specified gripper type and port
-    moveit_config = get_versioned_moveit_config(robot_version, gripper_type, port)
+    # Get versioned MoveIt config with specified gripper type, port, and speed
+    moveit_config = get_versioned_moveit_config(gripper_type, port, use_fake_hardware=False, speed_deg_s=speed_deg_s)
     
     # Update robot description with hardware interface parameters
     robot_description = moveit_config.robot_description
@@ -174,6 +174,11 @@ def generate_launch_description():
             'port',
             default_value='',
             description='Serial port for robot connection (e.g., /dev/ttyACM0). Leave empty for auto-detection.'
+        ),
+        DeclareLaunchArgument(
+            'speed_deg_s',
+            default_value='20',
+            description='Default speed in degrees per second for joint movements.'
         ),
         OpaqueFunction(function=launch_setup)
     ])
