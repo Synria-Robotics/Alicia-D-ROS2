@@ -205,9 +205,7 @@ void SerialCommunicator::read_thread_loop()
             // Append to rx_buffer
             rx_buffer.insert(rx_buffer.end(), read_buffer.begin(), read_buffer.end());
 
-            // Process frames from buffer (matching Python SDK logic)
             while (rx_buffer.size() >= DEFAULT_LENGTH) {
-                // Clear buffer if it gets too large (corruption protection)
                 if (rx_buffer.size() > MAX_BUFFER_SIZE) {
                     if (debug_mode_) {
                         RCLCPP_WARN(logger_, "RX buffer overflow, clearing buffer (size=%zu)", rx_buffer.size());
@@ -427,7 +425,7 @@ std::string SerialCommunicator::find_serial_port()
 std::pair<bool, std::string> SerialCommunicator::check_serial_permissions(const std::string& device_name) const
 {
     #ifdef _WIN32
-        return {true, ""};  // Windows doesn't need permission checks
+        return {true, ""};  
     #endif
 
     if (!std::filesystem::exists(device_name)) {
@@ -502,7 +500,6 @@ std::string SerialCommunicator::normalize_device_name(const std::string& device_
     #endif
 
     #ifdef __linux__
-        // Linux: ensure /dev/ prefix
         if (result.find("/dev/") != 0) {
             if (result.find("tty") == 0 || result.find("cu") == 0) {
                 result = "/dev/" + result;

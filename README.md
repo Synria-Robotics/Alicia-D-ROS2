@@ -32,15 +32,27 @@
 alicia_d_driver/
 ├── include/alicia_d_driver/
 │   ├── alicia_d_hardware_interface.hpp    # 硬件接口头文件
-│   └── alicia_d_driver_node.hpp            # 独立驱动节点
+│   └── alicia_d_driver_node.hpp          # 独立驱动节点
 ├── src/
-│   ├── alicia_d_hardware_interface.cpp     # 硬件接口实现
-│   ├── alicia_d_driver_node.cpp            # 独立驱动
-│   └── serial_communicator.cpp             # 串口通信
+│   ├── alicia_d_hardware_interface.cpp   # 硬件接口实现
+│   ├── alicia_d_driver_node.cpp          # 独立驱动
+│   └── serial_communicator.cpp           # 串口通信
 ├── launch/
-│   └── alicia_d_driver.launch.py           # 独立驱动启动
-├── alicia_d_driver.xml                     # 插件描述
+│   └── alicia_d_driver.launch.py         # 独立驱动启动
+├── alicia_d_driver.xml                   # 插件描述
 └── CMakeLists.txt
+
+alicia_d_moveit/
+├── config/
+│   ├── alicia_d_descriptions.ros2_control.xacro  # 硬件接口配置
+│   ├── ros2_controllers.yaml                     # 控制器配置
+│   ├── moveit_controllers.yaml                   # MoveIt 控制器映射
+│   └── ...                                       # 其他 MoveIt 配置
+├── launch/
+│   ├── real_robot.launch.py                      # 真实机械臂启动
+│   ├── demo.launch.py                            # 仿真启动
+│   └── ...                                       # 其他启动文件
+└── package.xml
 
 ```
 

@@ -629,20 +629,23 @@ std::string AliciaDDataParserControl::decimal_to_version_string(int decimal_valu
     if (decimal_value < 0) {
         return "unknown";
     }
-    
+
     std::string decimal_str = std::to_string(decimal_value);
-    
+
     if (decimal_str.length() == 1) {
-        return "0.0" + decimal_str;
+        return "0.0." + decimal_str;
     } else if (decimal_str.length() == 2) {
-        return "0." + decimal_str;
-    } else if (decimal_str.length() >= 3) {
-        std::string major = decimal_str.substr(0, decimal_str.length() - 2);
-        std::string minor = decimal_str.substr(decimal_str.length() - 2);
-        return major + "." + minor;
+        return std::string(1, decimal_str[0]) + "." +
+               std::string(1, decimal_str[1]) + ".0";
+    } else if (decimal_str.length() == 3) {
+        return std::string(1, decimal_str[0]) + "." +
+               std::string(1, decimal_str[1]) + "." +
+               std::string(1, decimal_str[2]);
+    } else {
+        return std::string(1, decimal_str[0]) + "." +
+               std::string(1, decimal_str[1]) + "." +
+               decimal_str.substr(2);
     }
-    
-    return "unknown";
 }
 
 // Getter functions

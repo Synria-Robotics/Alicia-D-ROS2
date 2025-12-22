@@ -136,11 +136,7 @@ void AliciaDDriverNode::joint_command_callback(const sensor_msgs::msg::JointStat
         auto it = joint_pos_map.find(joint_name);
         joint_angles.push_back(it != joint_pos_map.end() ? it->second : 0.0);
     }
-    
-    // Extract single speed value from velocities
-    // Note: sensor_msgs/JointState uses rad/s (ROS standard), but we convert to deg/s internally
-    // for consistency with our speed_deg_s parameter. Users should provide velocities in rad/s
-    // to follow ROS conventions, but we convert them to degrees internally.
+
     double speed_deg_s = default_speed_deg_s_;  // Default speed in deg/s
     bool has_velocity = false;
     double max_abs_vel = 0.0;

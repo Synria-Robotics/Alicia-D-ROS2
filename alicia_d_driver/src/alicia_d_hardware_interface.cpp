@@ -38,9 +38,6 @@ CallbackReturn AliciaDHardwareInterface::on_init(
   hw_velocities_state_.resize(info_.joints.size(), 0.0);
   hw_velocities_command_.resize(info_.joints.size(), 0.0);
 
-  // Initialize timing for real-time control (no rate limiting needed).
-  // Use steady time to match controller_manager's clock type and avoid
-  // "can't subtract times with different time sources" exceptions.
   last_write_time_ = rclcpp::Time(0, 0, RCL_STEADY_TIME);
   min_write_period_ = 0.0;  // No rate limiting - send commands every cycle for real-time control
 
@@ -267,18 +264,12 @@ return_type AliciaDHardwareInterface::write(
   }
   
   // Extract gripper position and convert to value (0-1000)
-  // -1.0 means use current (matching Python SDK None)
   double gripper_value = -1.0;
   if (hw_positions_command_.size() > 6)
   {
     gripper_value = data_parser_control_->gripper_position_to_value(hw_positions_command_[6]);
   }
   
-  // Always use default_speed_deg_s to ensure user's speed_deg_s parameter is respected
-  // MoveIt's velocity commands are ignored - the speed_deg_s parameter controls the actual speed
-  // This ensures consistent behavior: setting speed_deg_s=40 will always use 40 deg/s
-  // Note: MoveIt may provide velocity commands in trajectories, but we ignore them to respect
-  // the user's explicit speed setting via the speed_deg_s launch parameter
   double speed_deg_s = default_speed_deg_s_;
   
   // Periodic logging to verify speed is being used (log every 2000 calls = ~10 seconds at 200Hz)
@@ -293,8 +284,6 @@ return_type AliciaDHardwareInterface::write(
     last_logged_speed = speed_deg_s;
   }
   
-  // Use unified set_joint_and_gripper method (matching Python SDK)
-  // Joint and gripper are controlled in one frame with single speed for all joints
   data_parser_control_->set_joint_and_gripper(joint_angles, gripper_value, speed_deg_s);
 
   return return_type::OK;
