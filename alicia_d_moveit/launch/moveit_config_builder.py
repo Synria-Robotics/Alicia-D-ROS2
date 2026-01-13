@@ -45,14 +45,12 @@ def get_versioned_moveit_config(
     
     # Xacro arguments for hardware interface configuration
     # Pass the original gripper_type (may be "auto") to hardware interface for auto-detection
-    # Pass speed_deg_s directly (no conversion needed)
     xacro_args = {
         'hw_port': port if port else '',  # Empty string for auto-detection
         'hw_gripper_type': gripper_type,  # Can be "auto", "50mm", or "100mm"
         'hw_default_speed_deg_s': str(speed_deg_s),
     }
     
-    # Build MoveIt config with versioned xacro
     moveit_config = (
         MoveItConfigsBuilder(f"Alicia_D_v5_6_gripper_{gripper_type_for_urdf}", package_name=pkg_name)
         .robot_description(file_path=xacro_path, mappings=xacro_args)

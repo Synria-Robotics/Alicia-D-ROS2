@@ -67,18 +67,45 @@ Or temporarily:
 sudo chmod 666 /dev/ttyACM0
 ```
 
-### 2. Get Source Code and Build
+### 2. Get Source Code
 
 ```bash
 mkdir -p ~/alicia_ws/src
 cd ~/alicia_ws
 git clone https://github.com/Synria-Robotics/Alicia-D-ROS2.git -b v6.1.0 ./src
+```
+
+### 3. Install Dependencies
+
+Install all required ROS 2 packages and system dependencies:
+
+```bash
+cd ~/alicia_ws/src
+./install.sh
+```
+
+Alternatively, install dependencies manually:
+
+```bash
+sudo apt update
+sudo apt install -y python3-rosdep
+sudo rosdep init
+rosdep update
+cd ~/alicia_ws
 rosdep install --from-paths src --ignore-src -r -y
+```
+
+**Note**: `sudo rosdep init` only needs to be run once per system. If you've already initialized rosdep, skip that step.
+
+### 4. Build Workspace
+
+```bash
+cd ~/alicia_ws
 colcon build
 source install/setup.bash
 ```
 
-### 3. Launch Real Robot with MoveIt
+### 5. Launch Real Robot with MoveIt
 
 ```bash
 ros2 launch alicia_d_moveit real_robot.launch.py

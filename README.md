@@ -71,18 +71,45 @@ sudo usermod -a -G dialout $USER
 sudo chmod 666 /dev/ttyACM*
 ```
 
-### 2. 获取源代码并编译
+### 2. 获取源代码
 
 ```bash
 mkdir -p ~/alicia_ws/src
 cd ~/alicia_ws
 git clone https://github.com/Synria-Robotics/Alicia-D-ROS2.git -b v6.1.0 ./src
+```
+
+### 3. 安装依赖
+
+安装所有必需的 ROS 2 包和系统依赖：
+
+```bash
+cd ~/alicia_ws/src
+./install.sh
+```
+
+或者手动安装依赖：
+
+```bash
+sudo apt update
+sudo apt install -y python3-rosdep
+sudo rosdep init
+rosdep update
+cd ~/alicia_ws
 rosdep install --from-paths src --ignore-src -r -y
+```
+
+**注意**：`sudo rosdep init` 每个系统只需运行一次。如果已经初始化过 rosdep，请跳过该步骤。
+
+### 4. 编译工作空间
+
+```bash
+cd ~/alicia_ws
 colcon build
 source install/setup.bash
 ```
 
-### 3. 启动真实机械臂
+### 5. 启动真实机械臂
 
 #### 使用 MoveIt（推荐）
 

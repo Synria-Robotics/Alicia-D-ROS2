@@ -15,14 +15,11 @@ from moveit_config_builder import get_versioned_moveit_config
 def launch_setup(context, *args, **kwargs):
     """Setup demo launch with versioned config."""
     # Get launch configuration values
-    robot_version = LaunchConfiguration('robot_version').perform(context)
     gripper_type = LaunchConfiguration('gripper_type').perform(context)
     
-    print(f'\033[1;32m[INFO] Starting MoveIt demo with robot version: {robot_version}, gripper type: {gripper_type}\033[0m')
     
     # Get versioned MoveIt config using fake hardware for demo
     moveit_config = get_versioned_moveit_config(
-        robot_version,
         gripper_type,
         use_fake_hardware=True,
     )
@@ -169,7 +166,7 @@ def launch_setup(context, *args, **kwargs):
 
 
 def generate_launch_description():
-    """Generate launch description with robot version and gripper type arguments."""
+    """Generate launch description with robot  gripper type arguments."""
     return LaunchDescription([
 
         DeclareLaunchArgument(

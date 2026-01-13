@@ -19,7 +19,6 @@ sudo apt install -y \
   ros-humble-moveit-simple-controller-manager \
   ros-humble-moveit-configs-utils \
   ros-humble-moveit-ros-visualization \
-  ros-humble-moveit-ros-warehouse \
   ros-humble-moveit-setup-assistant
 
 # Robot description and visualization
