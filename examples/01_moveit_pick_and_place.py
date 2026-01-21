@@ -9,7 +9,7 @@ Alicia D机械臂 Pick and Place 演示程序
 
 然后在另一个终端运行此脚本:
     cd ~/alicia_ws
-    python3 ./src/examples/01_demo_pick_and_place.py
+    python3 ./src/examples/01_moveit_pick_and_place.py
 """
 
 import sys
