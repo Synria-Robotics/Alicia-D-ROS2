@@ -8,10 +8,10 @@ Alicia D机械臂 拖动示教演示程序
 3. 用户再次按Enter，机械臂恢复力矩
 4. 询问用户是否回放轨迹，按Enter确认后机械臂按记录的轨迹运动
 
-运行前需要先启动:
+运行前需要先启动(注意夹爪类型50/100mm):
     cd ~/alicia_ws
     source install/setup.bash
-    ros2 launch alicia_d_driver alicia_d_driver.launch.py
+    ros2 launch alicia_d_driver alicia_d_driver.launch.py gripper_type:=50mm
 
 然后在另一个终端运行此脚本:
     cd ~/alicia_ws

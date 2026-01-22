@@ -2,10 +2,10 @@
 """
 Alicia D机械臂 Pick and Place 演示程序
 
-运行前需要先启动:
+运行前需要先启动(注意夹爪类型50/100mm):
     cd ~/alicia_ws
     source install/setup.bash
-    ros2 launch alicia_d_driver alicia_d_driver.launch.py
+    ros2 launch alicia_d_driver alicia_d_driver.launch.py gripper_type:=50mm
 
 然后在另一个终端运行此脚本:
     cd ~/alicia_ws
@@ -59,9 +59,9 @@ class PickAndPlaceDemo(Node):
         self.position_b = [0.3, -0.279, 0.349, -0.105, -0.715, 0.314]
         self.position_b_above = [0.32, -0.052, 0.471, -0.087, -1.134, 0.297]
         
-        # 夹爪位置 (0-1000，实际硬件：0为张开，1000为闭合)
-        self.gripper_open = 0.0      # 张开
-        self.gripper_close = 1000.0  # 闭合
+        # 夹爪位置 (0-1000)
+        self.gripper_open = 1000.0      # 张开
+        self.gripper_close = 0.0  # 闭合
         
         # 默认运动速度（度/秒）
         self.default_speed_deg_s = 30.0
@@ -150,7 +150,7 @@ class PickAndPlaceDemo(Node):
         else:
             cmd_msg.position = self.home_position + [gripper_value]
         
-        gripper_state = "闭合" if gripper_value > 700 else "张开"
+        gripper_state = "闭合" if gripper_value < 100 else "张开"
         self.get_logger().info(f'夹爪{gripper_state}...')
         self.joint_command_pub.publish(cmd_msg)
         

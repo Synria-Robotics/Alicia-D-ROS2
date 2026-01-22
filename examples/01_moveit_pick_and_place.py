@@ -2,10 +2,10 @@
 """
 Alicia D机械臂 Pick and Place 演示程序
 
-运行前需要先启动:
+运行前需要先启动(注意夹爪类型50/100mm):
     cd ~/alicia_ws
     source install/setup.bash
-    ros2 launch alicia_d_moveit real_robot.launch.py
+    ros2 launch alicia_d_moveit real_robot.launch.py gripper_type:=50mm
 
 然后在另一个终端运行此脚本:
     cd ~/alicia_ws
@@ -69,8 +69,8 @@ class PickAndPlaceDemo(Node):
         self.position_b_above = [0.32, -0.052, 0.471, -0.087, -1.134, 0.297]
         
         # 夹爪位置
-        self.gripper_open = [0.025]  # 张开
-        self.gripper_close = [0.0]   # 闭合
+        self.gripper_open = [0.0]  # 张开
+        self.gripper_close = [0.025]   # 闭合
         
     def move_arm_to_joint_positions(self, joint_positions, duration_sec=3.0):
         """
@@ -139,7 +139,7 @@ class PickAndPlaceDemo(Node):
         goal_msg.trajectory = trajectory
         
         # 发送目标
-        gripper_state = "闭合" if gripper_position[0] < 0.01 else "张开"
+        gripper_state = "闭合" if gripper_position[0] > 0.02 else "张开"
         # self.get_logger().info(f'夹爪{gripper_state}')
         send_goal_future = self.gripper_action_client.send_goal_async(goal_msg)
         rclpy.spin_until_future_complete(self, send_goal_future)
