@@ -1,0 +1,149 @@
+# =============================================================================
+# Cube Sorting Configuration for Alicia D Robot
+# =============================================================================
+# This file defines all parameters for the cube sorting application including:
+# - Robot joint positions (HOME, DROP zones)
+# - Color detection parameters (HSV ranges)
+# - Grasp offsets and gripper settings
+# - Color-to-drop-zone mapping
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# 3D Position Estimation Mode
+# -----------------------------------------------------------------------------
+# depth_mode: true  - Use depth camera for 3D position (requires depth topic)
+# depth_mode: false - Use A4 paper plane reference method (no depth camera needed)
+depth_mode: false
+
+# -----------------------------------------------------------------------------
+# Camera Topics
+# -----------------------------------------------------------------------------
+camera:
+  color_topic: "/camera/color/image_raw"
+  color_info_topic: "/camera/color/camera_info"
+  depth_topic: "/camera/depth/image_raw"
+  depth_info_topic: "/camera/depth/camera_info"
+
+# -----------------------------------------------------------------------------
+# Hand-Eye Calibration File Path (relative to alicia_d_calibation package)
+# -----------------------------------------------------------------------------
+calibration_file: "hand_eye_calibration_result.yaml"
+
+# -----------------------------------------------------------------------------
+# Robot Joint Positions (radians)
+# -----------------------------------------------------------------------------
+# Note: These are reference values from ROS1. 
+# Please update with actual positions obtained from your robot through teaching.
+positions:
+  # HOME position - Camera viewing position for cube detection
+  home:
+    joints: [0.0, 0.1089, 0.6703, 0.0, -1.4174, 0.0]
+    description: "Camera viewing position for cube detection"
+  
+  # Drop zone for GREEN cubes
+  drop_green:
+    joints: [1.0, -0.0483, 0.8309, -0.0545, -1.4830, -1.3617]
+    description: "Position above green cube drop zone"
+  
+  # Drop zone for BLUE cubes
+  drop_blue:
+    joints: [-1.0, 0.0882, 0.3399, 0.0468, -1.2804, -1.3249]
+    description: "Position above blue cube drop zone"
+
+# -----------------------------------------------------------------------------
+# Color to Drop Position Mapping
+# -----------------------------------------------------------------------------
+# Maps detected cube color to the drop zone position name
+color_drop_map:
+  green: "drop_green"
+  blue: "drop_blue"
+
+# -----------------------------------------------------------------------------
+# Color Detection Parameters (HSV color space)
+# -----------------------------------------------------------------------------
+# HSV ranges: [H_min, S_min, V_min] - [H_max, S_max, V_max]
+# H: 0-180, S: 0-255, V: 0-255
+color_ranges:
+  green:
+    lower: [35, 80, 80]
+    upper: [85, 255, 255]
+  blue:
+    lower: [90, 80, 80]
+    upper: [130, 255, 255]
+
+# Detection thresholds
+detection:
+  min_area: 150           # Minimum contour area in pixels
+  max_area: 10000         # Maximum contour area in pixels
+  min_solidity: 0.8       # Minimum solidity (area / convex hull area)
+  aspect_ratio_min: 0.7   # Minimum aspect ratio for cube detection
+  aspect_ratio_max: 1.4   # Maximum aspect ratio for cube detection
+  
+  # CLAHE (Contrast Limited Adaptive Histogram Equalization) parameters
+  clahe_clip_limit: 2.0
+  clahe_tile_size: [8, 8]
+
+# -----------------------------------------------------------------------------
+# A4 Paper Plane Reference Method Parameters
+# -----------------------------------------------------------------------------
+a4_paper:
+  width: 0.297            # A4 width in meters (landscape)
+  height: 0.210           # A4 height in meters (landscape)
+  # For portrait orientation, swap width and height
+
+# -----------------------------------------------------------------------------
+# Cube Physical Parameters
+# -----------------------------------------------------------------------------
+cube:
+  size: 0.020             # Cube edge length in meters (20mm)
+
+# -----------------------------------------------------------------------------
+# Grasp Parameters (meters)
+# -----------------------------------------------------------------------------
+grasp_offsets:
+  pre_grasp_z: 0.05       # Height above cube for approach
+  grasp_z: 0.01           # Final grasp height above cube center
+  lift_z: 0.10            # Lift height after grasping
+  pre_drop_z: 0.08        # Height above drop zone before release
+
+# -----------------------------------------------------------------------------
+# Gripper Parameters
+# -----------------------------------------------------------------------------
+gripper:
+  open: 0.0               # Gripper open position (MoveIt joint value)
+  closed: 0.025           # Gripper closed position for grasping cubes
+  grasp_force: 0.5        # Grasp force (if supported by gripper)
+
+# -----------------------------------------------------------------------------
+# Motion Parameters
+# -----------------------------------------------------------------------------
+motion:
+  arm_move_duration: 2.0  # Duration for arm movements (seconds)
+  gripper_duration: 1.0   # Duration for gripper open/close (seconds)
+  detection_wait: 2.0     # Wait time for stable detection (seconds)
+
+# -----------------------------------------------------------------------------
+# Detection Confirmation (Noise Filtering)
+# -----------------------------------------------------------------------------
+# Multi-frame confirmation to filter out noise detections
+detection_confirmation:
+  confirm_count: 5         # Number of consecutive frames to confirm detection
+  distance_threshold: 0.01 # Max distance (m) to consider same cube across frames
+  timeout: 2.0             # Timeout (s) to forget unconfirmed detections
+
+# -----------------------------------------------------------------------------
+# TF Frame Names
+# -----------------------------------------------------------------------------
+frames:
+  base_frame: "base_link"
+  camera_optical_frame: "camera_color_optical_frame"
+  camera_link_frame: "camera_link"
+  gripper_frame: "gripper_center"
+
+# -----------------------------------------------------------------------------
+# Sorting Priority
+# -----------------------------------------------------------------------------
+# Order in which colors are sorted (first color is highest priority)
+sorting_priority:
+  - "green"
+  - "blue"
