@@ -14,6 +14,9 @@
 
 ---
 
+> [!note] 
+> 详细说明请访问[官网文档](https://docs.sparklingrobo.com/docs/alicia-d-series/)
+
 ## ✨ 主要特性
 
 *   **ros2_control 集成**：基于标准的 ros2_control 硬件接口，支持与 MoveIt2 无缝集成。
@@ -58,18 +61,20 @@ alicia_d_moveit/
 
 ## 快速开始
 
-### 1. 设置串口权限（永久性）
+### 1. 设置串口权限
+
+**方法1：临时设置串口权限**
+
+```bash
+sudo chmod 666 /dev/ttyACM*
+```
+
+**方法2：添加用户到dialout组**（永久有效）
 
 ```bash
 sudo usermod -a -G dialout $USER
 ```
-
-**然后需要完全注销并重新登录！**
-
-或临时设置：
-```bash
-sudo chmod 666 /dev/ttyACM*
-```
+> 注意：需要注销（Log out）再登陆，或者重启使权限生效。
 
 ### 2. 获取源代码
 
