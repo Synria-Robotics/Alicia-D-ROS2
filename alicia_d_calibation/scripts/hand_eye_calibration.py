@@ -19,7 +19,7 @@ Alicia-D 机械臂手眼标定脚本 (Eye-in-Hand)
        ros2 launch orbbec_camera gemini_335.launch.py
 
     3. 运行此标定脚本:
-       ros2 run alicia_d_calibration hand_eye_calibration.py
+       ros2 launch alicia_d_calibration hand_eye_calibration.launch.py
 """
 
 import sys
@@ -42,6 +42,9 @@ from sensor_msgs.msg import Image, CameraInfo
 from geometry_msgs.msg import TransformStamped
 from control_msgs.action import FollowJointTrajectory
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
+from moveit_msgs.srv import GetMotionPlan
+from moveit_msgs.msg import Constraints, JointConstraint
+from moveit_msgs.action import ExecuteTrajectory
 from tf2_ros import TransformBroadcaster, Buffer, TransformListener
 from cv_bridge import CvBridge
 from rclpy.duration import Duration
@@ -97,6 +100,15 @@ class HandEyeCalibration(Node):
         self.marker_detected = False
         self.image_lock = threading.Lock()
         
+        # ArUco检测去噪：多帧历史缓冲区
+        self.detection_history_size = 10  # 保存最近10帧检测结果
+        self.detection_min_frames = 5     # 至少需要5帧有效检测
+        self.detection_rvec_history = []  # 旋转向量历史
+        self.detection_tvec_history = []  # 平移向量历史
+        self.denoised_rvec = None         # 去噪后的旋转向量
+        self.denoised_tvec = None         # 去噪后的平移向量
+        self.detection_stable = False     # 检测是否稳定
+        
         # 采样数据存储
         self.R_gripper2base_samples = []  # 末端到基座的旋转矩阵
         self.t_gripper2base_samples = []  # 末端到基座的平移向量
@@ -110,6 +122,13 @@ class HandEyeCalibration(Node):
             FollowJointTrajectory, 
             '/Alicia_controller/follow_joint_trajectory'
         )
+        
+        # MoveIt ExecuteTrajectory action 客户端
+        self.execute_trajectory_client = ActionClient(
+            self, ExecuteTrajectory, '/execute_trajectory')
+        
+        # 运动规划服务客户端
+        self.plan_client = self.create_client(GetMotionPlan, '/plan_kinematic_path')
         
         # TF2
         self.tf_buffer = Buffer()
@@ -287,7 +306,69 @@ class HandEyeCalibration(Node):
                         self.current_rvec = rvec.flatten()
                         self.current_tvec = tvec.flatten()
                         self.marker_detected = True
+                        
+                        # 添加到历史缓冲区
+                        self._add_detection_to_history(self.current_rvec, self.current_tvec)
                     break
+        
+        # 如果没检测到，也要更新历史（添加None表示丢失帧）
+        if not self.marker_detected:
+            self._add_detection_to_history(None, None)
+    
+    def _add_detection_to_history(self, rvec, tvec):
+        """添加检测结果到历史缓冲区并计算去噪结果"""
+        # 添加到历史
+        self.detection_rvec_history.append(rvec)
+        self.detection_tvec_history.append(tvec)
+        
+        # 保持历史长度
+        if len(self.detection_rvec_history) > self.detection_history_size:
+            self.detection_rvec_history.pop(0)
+            self.detection_tvec_history.pop(0)
+        
+        # 计算去噪结果
+        self._compute_denoised_pose()
+    
+    def _compute_denoised_pose(self):
+        """从历史数据计算去噪后的位姿"""
+        # 过滤掉None值
+        valid_rvecs = [r for r in self.detection_rvec_history if r is not None]
+        valid_tvecs = [t for t in self.detection_tvec_history if t is not None]
+        
+        # 检查是否有足够的有效检测
+        if len(valid_rvecs) < self.detection_min_frames:
+            self.detection_stable = False
+            self.denoised_rvec = None
+            self.denoised_tvec = None
+            return
+        
+        # 转换为numpy数组
+        rvec_array = np.array(valid_rvecs)
+        tvec_array = np.array(valid_tvecs)
+        
+        # 检查一致性：计算标准差，如果太大则不稳定
+        tvec_std = np.std(tvec_array, axis=0)
+        max_std = np.max(tvec_std)
+        
+        # 如果平移的标准差超过5mm，认为不稳定
+        if max_std > 0.005:
+            self.detection_stable = False
+            self.denoised_rvec = None
+            self.denoised_tvec = None
+            return
+        
+        # 使用中值滤波去除异常值，然后取平均
+        self.denoised_rvec = np.median(rvec_array, axis=0)
+        self.denoised_tvec = np.median(tvec_array, axis=0)
+        self.detection_stable = True
+    
+    def clear_detection_history(self):
+        """清空检测历史"""
+        self.detection_rvec_history = []
+        self.detection_tvec_history = []
+        self.denoised_rvec = None
+        self.denoised_tvec = None
+        self.detection_stable = False
     
     def _display_image(self):
         """显示图像窗口"""
@@ -337,6 +418,11 @@ class HandEyeCalibration(Node):
         samples_text = f'Samples: {len(self.R_gripper2base_samples)}/{self.min_samples}'
         cv2.putText(display_img, samples_text, (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
         
+        # 显示去噪状态
+        stable_color = (0, 255, 0) if self.detection_stable else (0, 165, 255)
+        stable_text = f'Stable: {"Yes" if self.detection_stable else "No"} ({len([r for r in self.detection_rvec_history if r is not None])}/{self.detection_history_size})'
+        cv2.putText(display_img, stable_text, (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, stable_color, 2)
+        
         # 显示图像
         cv2.imshow('Hand-Eye Calibration - ArUco Detection', display_img)
         cv2.waitKey(1)
@@ -348,6 +434,18 @@ class HandEyeCalibration(Node):
             self.get_logger().error('无法连接到机械臂 Action 服务器')
             return False
         self.get_logger().info('机械臂 Action 服务器已连接')
+        
+        self.get_logger().info('等待ExecuteTrajectory服务器...')
+        if not self.execute_trajectory_client.wait_for_server(timeout_sec=10.0):
+            self.get_logger().error('无法连接到ExecuteTrajectory服务器')
+            return False
+        self.get_logger().info('ExecuteTrajectory服务器已连接')
+        
+        self.get_logger().info('等待运动规划服务...')
+        if not self.plan_client.wait_for_service(timeout_sec=10.0):
+            self.get_logger().error('无法连接到运动规划服务')
+            return False
+        self.get_logger().info('运动规划服务已连接')
         
         self.get_logger().info('等待相机数据...')
         timeout = 30.0
@@ -361,9 +459,156 @@ class HandEyeCalibration(Node):
         self.get_logger().info('相机数据已就绪')
         return True
     
+    def plan_to_joint_positions(self, joint_positions):
+        """
+        使用MoveIt规划到目标关节位置的轨迹
+        
+        Args:
+            joint_positions: 目标关节位置列表
+            
+        Returns:
+            规划好的轨迹或None（规划失败时）
+        """
+        request = GetMotionPlan.Request()
+        
+        # 设置规划组
+        request.motion_plan_request.group_name = "Alicia"
+        request.motion_plan_request.num_planning_attempts = 5
+        request.motion_plan_request.allowed_planning_time = 5.0
+        request.motion_plan_request.max_velocity_scaling_factor = 0.3
+        request.motion_plan_request.max_acceleration_scaling_factor = 0.3
+        
+        # 使用当前状态作为起始状态
+        request.motion_plan_request.start_state.is_diff = True
+        
+        # 设置关节目标约束
+        goal_constraints = Constraints()
+        goal_constraints.name = "joint_goal"
+        
+        for i, joint_name in enumerate(self.arm_joint_names):
+            joint_constraint = JointConstraint()
+            joint_constraint.joint_name = joint_name
+            joint_constraint.position = float(joint_positions[i])
+            joint_constraint.tolerance_above = 0.01
+            joint_constraint.tolerance_below = 0.01
+            joint_constraint.weight = 1.0
+            goal_constraints.joint_constraints.append(joint_constraint)
+        
+        request.motion_plan_request.goal_constraints.append(goal_constraints)
+        
+        # 调用规划服务
+        try:
+            self.get_logger().info(f'规划到关节位置: {[f"{j:.3f}" for j in joint_positions]}')
+            future = self.plan_client.call_async(request)
+            
+            # 非阻塞等待，保持图像更新
+            timeout_sec = 10.0
+            start_time = time.time()
+            while not future.done():
+                rclpy.spin_once(self, timeout_sec=0.05)
+                if time.time() - start_time > timeout_sec:
+                    self.get_logger().error('运动规划服务超时')
+                    return None
+            
+            response = future.result()
+            
+            if response.motion_plan_response.error_code.val == 1:  # SUCCESS
+                self.get_logger().info(f'规划成功，轨迹包含 {len(response.motion_plan_response.trajectory.joint_trajectory.points)} 个点')
+                return response.motion_plan_response.trajectory
+            else:
+                self.get_logger().error(f'运动规划失败，错误码: {response.motion_plan_response.error_code.val}')
+                return None
+                
+        except Exception as e:
+            self.get_logger().error(f'运动规划服务调用失败: {e}')
+            return None
+    
+    def execute_trajectory(self, trajectory):
+        """
+        执行规划好的轨迹（非阻塞方式，保持图像更新）
+        
+        Args:
+            trajectory: RobotTrajectory消息
+            
+        Returns:
+            bool: 是否执行成功
+        """
+        goal_msg = ExecuteTrajectory.Goal()
+        goal_msg.trajectory = trajectory
+        
+        self.get_logger().info('执行轨迹...')
+        
+        send_goal_future = self.execute_trajectory_client.send_goal_async(goal_msg)
+        
+        # 非阻塞等待目标接受
+        timeout_sec = 10.0
+        start_time = time.time()
+        while not send_goal_future.done():
+            rclpy.spin_once(self, timeout_sec=0.05)  # 保持回调处理
+            if time.time() - start_time > timeout_sec:
+                self.get_logger().error('等待轨迹执行目标接受超时')
+                return False
+        
+        goal_handle = send_goal_future.result()
+        if not goal_handle.accepted:
+            self.get_logger().error('轨迹执行目标被拒绝')
+            return False
+        
+        self.get_logger().info('轨迹执行目标已接受，等待完成...')
+        
+        # 根据轨迹时长计算超时
+        if trajectory.joint_trajectory.points:
+            last_point = trajectory.joint_trajectory.points[-1]
+            traj_duration = last_point.time_from_start.sec + last_point.time_from_start.nanosec / 1e9
+            timeout_sec = traj_duration + 15.0
+        else:
+            timeout_sec = 30.0
+        
+        result_future = goal_handle.get_result_async()
+        
+        # 非阻塞等待结果，同时保持图像更新
+        start_time = time.time()
+        while not result_future.done():
+            rclpy.spin_once(self, timeout_sec=0.05)  # 保持回调处理
+            if time.time() - start_time > timeout_sec:
+                self.get_logger().error('等待轨迹执行结果超时')
+                return False
+        
+        result = result_future.result()
+        if result.result.error_code.val == 1:  # SUCCESS
+            self.get_logger().info('轨迹执行完成')
+            return True
+        else:
+            self.get_logger().error(f'轨迹执行失败，错误码: {result.result.error_code.val}')
+            return False
+    
     def move_to_pose(self, joint_positions, duration_sec=4.0):
         """
-        移动机械臂到指定关节位置
+        移动机械臂到指定关节位置（使用MoveIt plan+execute）
+        
+        Args:
+            joint_positions: 关节位置列表 (弧度)
+            duration_sec: 运动时长 (秒) - 仅作为备用方法的参数
+        
+        Returns:
+            bool: 是否成功
+        """
+        self.get_logger().info(f'移动到位姿: {[f"{p:.3f}" for p in joint_positions]} (使用MoveIt)')
+        
+        # 使用MoveIt plan+execute
+        trajectory = self.plan_to_joint_positions(joint_positions)
+        if trajectory is not None:
+            if self.execute_trajectory(trajectory):
+                time.sleep(0.5)  # 等待机械臂稳定
+                return True
+        
+        # 如果MoveIt失败，回退到直接轨迹控制
+        self.get_logger().warn('MoveIt plan+execute失败，尝试直接轨迹控制...')
+        return self._move_to_pose_direct(joint_positions, duration_sec)
+    
+    def _move_to_pose_direct(self, joint_positions, duration_sec=4.0):
+        """
+        直接使用FollowJointTrajectory控制机械臂（备用方法）
         
         Args:
             joint_positions: 关节位置列表 (弧度)
@@ -384,10 +629,18 @@ class HandEyeCalibration(Node):
         trajectory.points.append(point)
         goal_msg.trajectory = trajectory
         
-        self.get_logger().info(f'移动到位姿: {[f"{p:.3f}" for p in joint_positions]}')
+        self.get_logger().info(f'直接控制移动到位姿: {[f"{p:.3f}" for p in joint_positions]}')
         
         send_goal_future = self.arm_action_client.send_goal_async(goal_msg)
-        rclpy.spin_until_future_complete(self, send_goal_future)
+        
+        # 非阻塞等待
+        timeout_sec = 10.0
+        start_time = time.time()
+        while not send_goal_future.done():
+            rclpy.spin_once(self, timeout_sec=0.05)
+            if time.time() - start_time > timeout_sec:
+                self.get_logger().error('等待目标接受超时')
+                return False
         
         goal_handle = send_goal_future.result()
         if not goal_handle.accepted:
@@ -395,7 +648,15 @@ class HandEyeCalibration(Node):
             return False
         
         result_future = goal_handle.get_result_async()
-        rclpy.spin_until_future_complete(self, result_future)
+        
+        # 非阻塞等待结果
+        timeout_sec = duration_sec + 10.0
+        start_time = time.time()
+        while not result_future.done():
+            rclpy.spin_once(self, timeout_sec=0.05)
+            if time.time() - start_time > timeout_sec:
+                self.get_logger().error('等待运动结果超时')
+                return False
         
         result = result_future.result()
         if result.result.error_code == 0:
@@ -439,11 +700,18 @@ class HandEyeCalibration(Node):
     
     def get_marker_pose(self):
         """
-        获取 ArUco 标记相对于相机的位姿
+        获取 ArUco 标记相对于相机的位姿（使用去噪后的结果）
         
         Returns:
             tuple: (rotation_matrix, translation_vector) 或 None
         """
+        # 优先使用去噪后的稳定结果
+        if self.detection_stable and self.denoised_rvec is not None:
+            rotation_matrix, _ = cv2.Rodrigues(self.denoised_rvec)
+            translation_vector = self.denoised_tvec
+            return rotation_matrix, translation_vector
+        
+        # 回退到单帧结果
         if not self.marker_detected or self.current_rvec is None:
             return None
         
@@ -700,22 +968,36 @@ class HandEyeCalibration(Node):
                 pose_idx += 1
                 continue
             
-            # 等待机械臂稳定
-            self.get_logger().info('等待机械臂稳定...')
-            time.sleep(2.0)
+            # 等待机械臂物理稳定
+            self.get_logger().info('等待机械臂稳定 ...')
+            settle_start = time.time()
+            while time.time() - settle_start < 2.0:
+                rclpy.spin_once(self, timeout_sec=0.05)  # 保持图像更新
             
-            # 更新图像显示并等待检测稳定
-            for _ in range(30):
-                rclpy.spin_once(self, timeout_sec=0.05)
+            # 清空检测历史，准备收集新的稳定检测
+            self.clear_detection_history()
             
-            # 检查标记是否可见
-            if not self.marker_detected:
-                self.get_logger().warn(f'位姿 {pose_idx + 1}: 标记未检测到，跳过')
+            # 收集足够的检测数据并等待稳定
+            self.get_logger().info('收集检测数据...')
+            stable_wait_start = time.time()
+            max_stable_wait = 5.0  # 最多等待5秒
+            
+            while time.time() - stable_wait_start < max_stable_wait:
+                rclpy.spin_once(self, timeout_sec=0.05)  # 保持回调处理
+                
+                # 检查是否已经稳定
+                if self.detection_stable:
+                    self.get_logger().info('检测已稳定')
+                    break
+            
+            # 检查标记是否可见且稳定
+            if not self.detection_stable:
+                self.get_logger().warn(f'位姿 {pose_idx + 1}: 标记检测不稳定，跳过')
                 pose_idx += 1
                 continue
             
-            # 标记检测到，自动记录采样点
-            self.get_logger().info(f'位姿 {pose_idx + 1}: 标记已检测到，自动记录采样点...')
+            # 标记检测稳定，自动记录采样点
+            self.get_logger().info(f'位姿 {pose_idx + 1}: 标记检测稳定，自动记录采样点...')
             if self.record_sample():
                 self.get_logger().info(f'✓ 已记录采样点 {len(self.R_gripper2base_samples)}/{self.min_samples}')
             else:

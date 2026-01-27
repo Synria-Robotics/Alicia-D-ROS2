@@ -86,14 +86,7 @@ conda activate calib
 执行标定启动文件：
 
 ```bash
-# 直接运行脚本
-ros2 run alicia_d_calibration hand_eye_calibration.py
-
-# 或使用启动文件（带参数）
-ros2 launch alicia_d_calibration hand_eye_calibration.launch.py \
-  aruco_dict:=DICT_4X4_50 \
-  marker_size:=0.05 \
-  marker_id:=0
+ros2 launch alicia_d_calibration hand_eye_calibration.launch.py
 ```
 
 ### 4. 验证标定结果

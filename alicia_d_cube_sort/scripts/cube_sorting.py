@@ -49,8 +49,12 @@ from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from geometry_msgs.msg import PoseArray, Pose, PoseStamped, TransformStamped
 from sensor_msgs.msg import JointState
 from std_msgs.msg import String
-from moveit_msgs.srv import GetPositionIK
-from moveit_msgs.msg import PositionIKRequest, RobotState
+from moveit_msgs.srv import GetPositionIK, GetMotionPlan
+from moveit_msgs.msg import (
+    PositionIKRequest, RobotState, Constraints, JointConstraint,
+    MotionPlanRequest, WorkspaceParameters
+)
+from moveit_msgs.action import MoveGroup, ExecuteTrajectory
 
 import tf2_ros
 from tf2_ros import TransformException
@@ -99,6 +103,30 @@ class CubeSorter(Node):
         self.gripper_action_client.wait_for_server()
         self.get_logger().info('Action servers connected!')
         
+        # MoveGroup action client for reliable motion planning and execution
+        self.move_group_client = ActionClient(
+            self, MoveGroup, '/move_action',
+            callback_group=self.action_callback_group)
+        self.get_logger().info('Waiting for MoveGroup action server...')
+        self.move_group_client.wait_for_server()
+        self.get_logger().info('MoveGroup action server connected!')
+        
+        # ExecuteTrajectory action client for executing planned trajectories
+        self.execute_trajectory_client = ActionClient(
+            self, ExecuteTrajectory, '/execute_trajectory',
+            callback_group=self.action_callback_group)
+        self.get_logger().info('Waiting for ExecuteTrajectory action server...')
+        self.execute_trajectory_client.wait_for_server()
+        self.get_logger().info('ExecuteTrajectory action server connected!')
+        
+        # Motion planning service client
+        self.plan_client = self.create_client(
+            GetMotionPlan, '/plan_kinematic_path',
+            callback_group=self.action_callback_group)
+        self.get_logger().info('Waiting for motion planning service...')
+        self.plan_client.wait_for_service()
+        self.get_logger().info('Motion planning service connected!')
+        
         # Joint names
         self.arm_joint_names = ['Joint1', 'Joint2', 'Joint3', 'Joint4', 'Joint5', 'Joint6']
         self.gripper_joint_names = ['Gripper']
@@ -119,7 +147,7 @@ class CubeSorter(Node):
         grasp_offsets = self.config.get('grasp_offsets', {})
         self.pre_grasp_z = grasp_offsets.get('pre_grasp_z', 0.05)
         self.grasp_z = grasp_offsets.get('grasp_z', 0.03)
-        self.lift_z = grasp_offsets.get('lift_z', 0.10)
+        self.lift_z = grasp_offsets.get('lift_z', 0.05)
         
         # End effector orientation for top-down grasp (pointing down)
         # Quaternion from euler(0, pi, 0) - rotation 180 deg around Y axis
@@ -250,6 +278,7 @@ class CubeSorter(Node):
         self.pre_grasp_z = grasp.get('pre_grasp_z', 0.05)
         self.grasp_z = grasp.get('grasp_z', 0.01)
         self.lift_z = grasp.get('lift_z', 0.10)
+        self.retract_distance = grasp.get('retract_distance', 0.05)  # Retract towards base while lifting
         
         # Sorting priority
         self.sorting_priority = self.config.get('sorting_priority', ['green', 'blue'])
@@ -530,18 +559,262 @@ class CubeSorter(Node):
             self.get_logger().warn('Gripper close command may have failed')
         time.sleep(1.0)  # Wait longer for gripper to fully close and grip cube
         
-        # Step 5: Lift the cube
-        lift_pos = (x, y, z + self.lift_z)
-        self.get_logger().info(f'Lifting to: {lift_pos}')
+        # Step 5: Retract and lift the cube (reduce moment arm on Joint 2)
+        # Calculate retract direction (towards base origin to reduce horizontal distance)
+        horizontal_dist = np.sqrt(x**2 + y**2)
+        if horizontal_dist > 0.01:  # Avoid division by zero
+            # Retract vector: move towards base origin
+            retract_x = -x / horizontal_dist * self.retract_distance
+            retract_y = -y / horizontal_dist * self.retract_distance
+        else:
+            retract_x = 0.0
+            retract_y = 0.0
+        
+        lift_pos = (x + retract_x, y + retract_y, z + self.lift_z)
+        self.get_logger().info(f'Retract & lift to: {lift_pos} (retracted {self.retract_distance:.3f}m towards base)')
         if not self.move_to_pose(lift_pos, duration_sec=1.5):
-            self.get_logger().error('Failed to lift cube')
+            self.get_logger().error('Failed to retract and lift cube')
             return False
         
         self.get_logger().info('Cube picked successfully!')
         return True
 
+    def plan_to_joint_positions(self, joint_positions):
+        """
+        Plan a trajectory to the specified joint positions using MoveIt motion planning.
+        
+        Args:
+            joint_positions: List of target joint positions
+            
+        Returns:
+            Planned trajectory or None if planning failed
+        """
+        request = GetMotionPlan.Request()
+        
+        # Set group name
+        request.motion_plan_request.group_name = "Alicia"
+        
+        # Set number of planning attempts and allowed time
+        request.motion_plan_request.num_planning_attempts = 5
+        request.motion_plan_request.allowed_planning_time = 5.0
+        
+        # Set velocity and acceleration scaling
+        request.motion_plan_request.max_velocity_scaling_factor = 0.3
+        request.motion_plan_request.max_acceleration_scaling_factor = 0.3
+        
+        # Use current state as start state
+        request.motion_plan_request.start_state.is_diff = True
+        
+        # Set goal constraints (joint space)
+        goal_constraints = Constraints()
+        goal_constraints.name = "joint_goal"
+        
+        for i, joint_name in enumerate(self.arm_joint_names):
+            joint_constraint = JointConstraint()
+            joint_constraint.joint_name = joint_name
+            joint_constraint.position = float(joint_positions[i])
+            joint_constraint.tolerance_above = 0.01  # ~0.5 degrees
+            joint_constraint.tolerance_below = 0.01
+            joint_constraint.weight = 1.0
+            goal_constraints.joint_constraints.append(joint_constraint)
+        
+        request.motion_plan_request.goal_constraints.append(goal_constraints)
+        
+        # Call planning service
+        try:
+            self.get_logger().info(f'Planning to joint positions: {[f"{j:.3f}" for j in joint_positions]}')
+            future = self.plan_client.call_async(request)
+            
+            # Wait for result with timeout
+            timeout_sec = 10.0
+            start_time = time.time()
+            while not future.done():
+                if time.time() - start_time > timeout_sec:
+                    self.get_logger().error('Motion planning service timeout')
+                    return None
+                time.sleep(0.05)
+            
+            response = future.result()
+            
+            if response.motion_plan_response.error_code.val == 1:  # SUCCESS
+                self.get_logger().info(f'Motion planning succeeded, trajectory has {len(response.motion_plan_response.trajectory.joint_trajectory.points)} points')
+                return response.motion_plan_response.trajectory
+            else:
+                error_codes = {
+                    1: "SUCCESS",
+                    -1: "PLANNING_FAILED",
+                    -2: "INVALID_MOTION_PLAN",
+                    -4: "CONTROL_FAILED",
+                    -6: "TIMED_OUT",
+                    -10: "START_STATE_IN_COLLISION",
+                    -12: "GOAL_IN_COLLISION",
+                    -15: "INVALID_GROUP_NAME",
+                    -31: "NO_IK_SOLUTION",
+                    99999: "FAILURE",
+                }
+                error_name = error_codes.get(response.motion_plan_response.error_code.val, "UNKNOWN")
+                self.get_logger().error(f'Motion planning failed: {response.motion_plan_response.error_code.val} ({error_name})')
+                return None
+                
+        except Exception as e:
+            self.get_logger().error(f'Motion planning service call failed: {e}')
+            return None
+    
+    def execute_trajectory(self, trajectory):
+        """
+        Execute a planned trajectory using the ExecuteTrajectory action.
+        
+        Args:
+            trajectory: RobotTrajectory message to execute
+            
+        Returns:
+            True if execution succeeded, False otherwise
+        """
+        goal_msg = ExecuteTrajectory.Goal()
+        goal_msg.trajectory = trajectory
+        
+        self.get_logger().info('Executing trajectory...')
+        
+        # Send goal asynchronously
+        send_goal_future = self.execute_trajectory_client.send_goal_async(goal_msg)
+        
+        # Wait for goal acceptance with timeout
+        timeout_sec = 10.0
+        start_time = time.time()
+        while not send_goal_future.done():
+            time.sleep(0.05)
+            if time.time() - start_time > timeout_sec:
+                self.get_logger().error('Timeout waiting for trajectory execution goal acceptance')
+                return False
+        
+        goal_handle = send_goal_future.result()
+        if not goal_handle.accepted:
+            self.get_logger().error('Trajectory execution goal rejected')
+            return False
+        
+        self.get_logger().info('Trajectory execution goal accepted, waiting for completion...')
+        
+        # Wait for result - calculate timeout based on trajectory duration
+        if trajectory.joint_trajectory.points:
+            last_point = trajectory.joint_trajectory.points[-1]
+            traj_duration = last_point.time_from_start.sec + last_point.time_from_start.nanosec / 1e9
+            timeout_sec = traj_duration + 15.0  # Extra buffer
+        else:
+            timeout_sec = 30.0
+        
+        result_future = goal_handle.get_result_async()
+        start_time = time.time()
+        while not result_future.done():
+            time.sleep(0.05)
+            if time.time() - start_time > timeout_sec:
+                self.get_logger().error('Timeout waiting for trajectory execution result')
+                return False
+        
+        result = result_future.result()
+        if result.result.error_code.val == 1:  # SUCCESS
+            self.get_logger().info('Trajectory execution completed successfully')
+            return True
+        else:
+            self.get_logger().error(f'Trajectory execution failed with error: {result.result.error_code.val}')
+            return False
+    
+    def move_arm_with_moveit(self, joint_positions):
+        """
+        Move arm using MoveIt plan + execute (more reliable than direct trajectory).
+        
+        Args:
+            joint_positions: List of target joint positions
+            
+        Returns:
+            True if movement succeeded, False otherwise
+        """
+        # Plan trajectory
+        trajectory = self.plan_to_joint_positions(joint_positions)
+        if trajectory is None:
+            self.get_logger().error('Failed to plan trajectory')
+            return False
+        
+        # Execute trajectory
+        success = self.execute_trajectory(trajectory)
+        if success:
+            # Wait for arm to physically settle
+            time.sleep(0.5)
+        return success
+
     def move_arm_to_joint_positions(self, joint_positions, duration_sec=None):
-        """Move arm to specified joint positions (blocking with timeout)"""
+        """Move arm to specified joint positions using MoveIt plan+execute"""
+        # First try MoveIt plan+execute (more reliable)
+        self.get_logger().info(f'Moving arm to: {[f"{j:.3f}" for j in joint_positions]} using MoveIt')
+        success = self.move_arm_with_moveit(joint_positions)
+        
+        if success:
+            # Verify we actually reached the target
+            if self._verify_joint_positions(joint_positions, tolerance=0.05):
+                return True
+            else:
+                self.get_logger().warn('MoveIt reported success but position verification failed')
+        
+        # Fallback to direct trajectory control
+        self.get_logger().warn('MoveIt plan+execute failed, trying direct trajectory control...')
+        success = self._move_arm_direct(joint_positions, duration_sec)
+        
+        if success:
+            # Wait and verify position
+            time.sleep(1.0)
+            if self._verify_joint_positions(joint_positions, tolerance=0.1):
+                return True
+            else:
+                self.get_logger().error('Direct control also failed position verification')
+                return False
+        return False
+    
+    def _verify_joint_positions(self, target_positions, tolerance=0.05):
+        """
+        Verify that current joint positions match target positions.
+        
+        Args:
+            target_positions: Expected joint positions
+            tolerance: Maximum allowed error in radians
+            
+        Returns:
+            True if within tolerance, False otherwise
+        """
+        if self.current_joint_state is None:
+            self.get_logger().warn('No current joint state available for verification')
+            return True  # Assume success if we can't verify
+        
+        # Extract current positions for arm joints
+        current_positions = []
+        for joint_name in self.arm_joint_names:
+            if joint_name in self.current_joint_state.name:
+                idx = self.current_joint_state.name.index(joint_name)
+                current_positions.append(self.current_joint_state.position[idx])
+            else:
+                self.get_logger().warn(f'Joint {joint_name} not found in current state')
+                return True  # Can't verify, assume success
+        
+        if len(current_positions) != len(target_positions):
+            return True  # Can't verify, assume success
+        
+        # Check each joint
+        max_error = 0.0
+        for i, (current, target) in enumerate(zip(current_positions, target_positions)):
+            error = abs(current - target)
+            max_error = max(max_error, error)
+            if error > tolerance:
+                self.get_logger().warn(
+                    f'Joint {self.arm_joint_names[i]} position error: {error:.4f} rad '
+                    f'(current: {current:.4f}, target: {target:.4f})')
+        
+        if max_error <= tolerance:
+            self.get_logger().info(f'Position verification passed (max error: {max_error:.4f} rad)')
+            return True
+        else:
+            self.get_logger().error(f'Position verification failed (max error: {max_error:.4f} rad > tolerance {tolerance})')
+            return False
+    
+    def _move_arm_direct(self, joint_positions, duration_sec=None):
+        """Move arm using direct FollowJointTrajectory action (fallback method)"""
         if duration_sec is None:
             duration_sec = self.arm_move_duration
         
@@ -667,7 +940,7 @@ class CubeSorter(Node):
     def move_to_home(self):
         """Move to HOME position"""
         self.get_logger().info('Moving to HOME position...')
-        return self.move_arm_to_joint_positions(self.home_position, 5.0)  # Longer duration for reliable movement
+        return self.move_arm_to_joint_positions(self.home_position, 3.0)  # Longer duration for reliable movement
     
     def move_to_drop_zone(self, color):
         """Move to drop zone for specified color"""
@@ -681,7 +954,7 @@ class CubeSorter(Node):
             position = self.drop_green_position
         
         self.get_logger().info(f'Moving to {drop_name} for {color} cube...')
-        return self.move_arm_to_joint_positions(position, 5.0)  # Use longer duration for drop zone movement
+        return self.move_arm_to_joint_positions(position, 3.0)  # Use longer duration for drop zone movement
     
     def _clear_detections(self):
         """Clear all cube detections and history"""

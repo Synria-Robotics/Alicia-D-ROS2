@@ -38,6 +38,7 @@ positions:
   # HOME position - Camera viewing position for cube detection
   home:
     joints: [0.0, 0.1089, 0.6703, 0.0, -1.4174, 0.0]
+    # joints: [0.0, 1.4021, -0.3927, 0.0, -1.0293, 0.0]
     description: "Camera viewing position for cube detection"
   
   # Drop zone for GREEN cubes
@@ -104,6 +105,7 @@ grasp_offsets:
   pre_grasp_z: 0.05       # Height above cube for approach
   grasp_z: 0.01           # Final grasp height above cube center
   lift_z: 0.10            # Lift height after grasping
+  retract_distance: 0.05  # Retract towards base while lifting (reduces Joint2 torque)
   pre_drop_z: 0.08        # Height above drop zone before release
 
 # -----------------------------------------------------------------------------

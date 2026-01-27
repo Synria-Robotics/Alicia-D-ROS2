@@ -20,7 +20,9 @@ from control_msgs.action import FollowJointTrajectory
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from moveit_msgs.msg import DisplayTrajectory
 from geometry_msgs.msg import Pose, PoseStamped
-from moveit_msgs.srv import GetPositionIK
+from moveit_msgs.srv import GetPositionIK, GetMotionPlan
+from moveit_msgs.msg import Constraints, JointConstraint
+from moveit_msgs.action import ExecuteTrajectory
 from sensor_msgs.msg import JointState
 import time
 from rclpy.duration import Duration
@@ -51,6 +53,19 @@ class PickAndPlaceDemo(Node):
         self.gripper_action_client.wait_for_server()
         self.get_logger().info('Action服务器已连接!')
         
+        # MoveIt ExecuteTrajectory action 客户端
+        self.execute_trajectory_client = ActionClient(
+            self, ExecuteTrajectory, '/execute_trajectory')
+        self.get_logger().info('等待ExecuteTrajectory服务器...')
+        self.execute_trajectory_client.wait_for_server()
+        self.get_logger().info('ExecuteTrajectory服务器已连接!')
+        
+        # 运动规划服务客户端
+        self.plan_client = self.create_client(GetMotionPlan, '/plan_kinematic_path')
+        self.get_logger().info('等待运动规划服务...')
+        self.plan_client.wait_for_service()
+        self.get_logger().info('运动规划服务已连接!')
+        
         # 关节名称
         self.arm_joint_names = ['Joint1', 'Joint2', 'Joint3', 'Joint4', 'Joint5', 'Joint6']
         self.gripper_joint_names = ['Gripper']
@@ -72,9 +87,142 @@ class PickAndPlaceDemo(Node):
         self.gripper_open = [0.0]  # 张开
         self.gripper_close = [0.025]   # 闭合
         
+    def plan_to_joint_positions(self, joint_positions):
+        """
+        使用MoveIt规划到目标关节位置的轨迹
+        
+        Args:
+            joint_positions: 目标关节位置列表
+            
+        Returns:
+            规划好的轨迹或None（规划失败时）
+        """
+        request = GetMotionPlan.Request()
+        
+        # 设置规划组
+        request.motion_plan_request.group_name = "Alicia"
+        request.motion_plan_request.num_planning_attempts = 5
+        request.motion_plan_request.allowed_planning_time = 5.0
+        request.motion_plan_request.max_velocity_scaling_factor = 0.3
+        request.motion_plan_request.max_acceleration_scaling_factor = 0.3
+        
+        # 使用当前状态作为起始状态
+        request.motion_plan_request.start_state.is_diff = True
+        
+        # 设置关节目标约束
+        goal_constraints = Constraints()
+        goal_constraints.name = "joint_goal"
+        
+        for i, joint_name in enumerate(self.arm_joint_names):
+            joint_constraint = JointConstraint()
+            joint_constraint.joint_name = joint_name
+            joint_constraint.position = float(joint_positions[i])
+            joint_constraint.tolerance_above = 0.01
+            joint_constraint.tolerance_below = 0.01
+            joint_constraint.weight = 1.0
+            goal_constraints.joint_constraints.append(joint_constraint)
+        
+        request.motion_plan_request.goal_constraints.append(goal_constraints)
+        
+        # 调用规划服务
+        try:
+            self.get_logger().info(f'规划到关节位置: {[f"{j:.3f}" for j in joint_positions]}')
+            future = self.plan_client.call_async(request)
+            rclpy.spin_until_future_complete(self, future, timeout_sec=10.0)
+            
+            if not future.done():
+                self.get_logger().error('运动规划服务超时')
+                return None
+            
+            response = future.result()
+            
+            if response.motion_plan_response.error_code.val == 1:  # SUCCESS
+                self.get_logger().info(f'规划成功，轨迹包含 {len(response.motion_plan_response.trajectory.joint_trajectory.points)} 个点')
+                return response.motion_plan_response.trajectory
+            else:
+                self.get_logger().error(f'运动规划失败，错误码: {response.motion_plan_response.error_code.val}')
+                return None
+                
+        except Exception as e:
+            self.get_logger().error(f'运动规划服务调用失败: {e}')
+            return None
+    
+    def execute_trajectory(self, trajectory):
+        """
+        执行规划好的轨迹
+        
+        Args:
+            trajectory: RobotTrajectory消息
+            
+        Returns:
+            bool: 是否执行成功
+        """
+        goal_msg = ExecuteTrajectory.Goal()
+        goal_msg.trajectory = trajectory
+        
+        self.get_logger().info('执行轨迹...')
+        
+        send_goal_future = self.execute_trajectory_client.send_goal_async(goal_msg)
+        rclpy.spin_until_future_complete(self, send_goal_future, timeout_sec=10.0)
+        
+        if not send_goal_future.done():
+            self.get_logger().error('等待轨迹执行目标接受超时')
+            return False
+        
+        goal_handle = send_goal_future.result()
+        if not goal_handle.accepted:
+            self.get_logger().error('轨迹执行目标被拒绝')
+            return False
+        
+        self.get_logger().info('轨迹执行目标已接受，等待完成...')
+        
+        # 根据轨迹时长计算超时
+        if trajectory.joint_trajectory.points:
+            last_point = trajectory.joint_trajectory.points[-1]
+            traj_duration = last_point.time_from_start.sec + last_point.time_from_start.nanosec / 1e9
+            timeout_sec = traj_duration + 15.0
+        else:
+            timeout_sec = 30.0
+        
+        result_future = goal_handle.get_result_async()
+        rclpy.spin_until_future_complete(self, result_future, timeout_sec=timeout_sec)
+        
+        if not result_future.done():
+            self.get_logger().error('等待轨迹执行结果超时')
+            return False
+        
+        result = result_future.result()
+        if result.result.error_code.val == 1:  # SUCCESS
+            self.get_logger().info('轨迹执行完成')
+            return True
+        else:
+            self.get_logger().error(f'轨迹执行失败，错误码: {result.result.error_code.val}')
+            return False
+    
     def move_arm_to_joint_positions(self, joint_positions, duration_sec=3.0):
         """
-        移动机械臂到指定关节位置
+        移动机械臂到指定关节位置（使用MoveIt plan+execute）
+        
+        Args:
+            joint_positions: 关节位置列表
+            duration_sec: 运动时长(秒) - 现在仅作为备用方法的参数
+        """
+        self.get_logger().info(f'移动机械臂到: {[f"{j:.3f}" for j in joint_positions]} (使用MoveIt)')
+        
+        # 使用MoveIt plan+execute
+        trajectory = self.plan_to_joint_positions(joint_positions)
+        if trajectory is not None:
+            if self.execute_trajectory(trajectory):
+                time.sleep(0.5)  # 等待机械臂稳定
+                return True
+        
+        # 如果MoveIt失败，回退到直接轨迹控制
+        self.get_logger().warn('MoveIt plan+execute失败，尝试直接轨迹控制...')
+        return self._move_arm_direct(joint_positions, duration_sec)
+    
+    def _move_arm_direct(self, joint_positions, duration_sec=3.0):
+        """
+        直接使用FollowJointTrajectory控制机械臂（备用方法）
         
         Args:
             joint_positions: 关节位置列表
@@ -95,7 +243,7 @@ class PickAndPlaceDemo(Node):
         goal_msg.trajectory = trajectory
         
         # 发送目标
-        self.get_logger().info(f'移动机械臂到: {joint_positions}......')
+        self.get_logger().info(f'直接控制移动到: {joint_positions}')
         send_goal_future = self.arm_action_client.send_goal_async(goal_msg)
         rclpy.spin_until_future_complete(self, send_goal_future)
         
