@@ -14,3 +14,10 @@ __pycache__/
 *~
 *.code-workspace
 test*
+
+# alicia_d_grasp_6d
+alicia_d_grasp_6d/GraspGen/
+alicia_d_grasp_6d/FoundationStereo/
+alicia_d_grasp_6d/SAM2/
+alicia_d_grasp_6d/scripts/orbbec_gemini_335/.bridge_data/
+alicia_d_grasp_6d/scripts/orbbec_gemini_335/outputs/
