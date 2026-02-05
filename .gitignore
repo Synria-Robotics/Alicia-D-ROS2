@@ -21,3 +21,5 @@ alicia_d_grasp_6d/FoundationStereo/
 alicia_d_grasp_6d/SAM2/
 alicia_d_grasp_6d/scripts/orbbec_gemini_335/.bridge_data/
 alicia_d_grasp_6d/scripts/orbbec_gemini_335/outputs/
+alicia_d_grasp_6d/scripts/intel_rs_d405/.bridge_data/
+alicia_d_grasp_6d/scripts/intel_rs_d405/outputs/
