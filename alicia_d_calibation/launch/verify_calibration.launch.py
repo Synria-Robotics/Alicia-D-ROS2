@@ -7,7 +7,11 @@
 #    ros2 launch alicia_d_moveit real_robot.launch.py gripper_type:=50mm
 
 # 2. 启动相机:
+#    Gemini 335:
 #    ros2 launch orbbec_camera gemini_335.launch.py
+#    RealSense D405:
+#    ros2 launch alicia_d_calibration verify_calibration.launch.py camera_topic:=/camera/camera/color/image_rect_raw camera_info_topic:=/camera/camera/color/camera_info
+
 
 # 3. 启动此验证文件:
 #    ros2 launch alicia_d_calibration verify_calibration.launch.py
@@ -82,11 +86,17 @@ def load_calibration_result(context, *args, **kwargs):
     #  0  0  0  1
     # 对应 RPY [-1.57, 0, -1.57]
     
+    # m_internal = np.array([
+    #     [ 0.0, -0.0,  1.0, 0.002],
+    #     [-1.0, -0.0, -0.0, -0.014],
+    #     [ 0.0, -1.0,  0.0, 0.000],
+    #     [ 0.0,  0.0,  0.0, 1.0]
+    # ])
     m_internal = np.array([
-        [ 0.0, -0.0,  1.0, 0.002],
-        [-1.0, -0.0, -0.0, -0.014],
-        [ 0.0, -1.0,  0.0, 0.000],
-        [ 0.0,  0.0,  0.0, 1.0]
+        [ -0.001, -0.001,  1.000, 0.000],
+        [ -1.000, 0.001, -0.001, -0.000],
+        [ -0.001, -1.000,  -0.001, 0.000],
+        [ 0.000,  0.000,  0.000, 1.000]
     ])
 
     # 3. 计算最终变换 T_gripper_link = T_gripper_optical * inv(T_link_optical)

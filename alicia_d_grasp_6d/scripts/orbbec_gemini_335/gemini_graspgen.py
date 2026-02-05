@@ -57,6 +57,13 @@ from grasp_gen.utils.meshcat_utils import (
 
 from scipy.spatial.transform import Rotation as R
 
+# Local utilities
+from utils.camera_utils import (
+    CameraParameterManager,
+    DEFAULT_IR_K, DEFAULT_RGB_K, DEFAULT_T_IR_TO_RGB,
+    DEFAULT_IR_RESOLUTION, DEFAULT_RGB_RESOLUTION, DEFAULT_BASELINE
+)
+
 
 class GraspGenerationNode:
     """
@@ -69,38 +76,21 @@ class GraspGenerationNode:
         self.grasp_cfg = None
         self.vis = None
         
-        # Camera intrinsics - IR camera (848x480 resolution)
-        # From: ros2 topic echo /camera/left_ir/camera_info
-        self.K_ir = np.array([
-            [411.666748046875, 0.0, 420.0250244140625],
-            [0.0, 411.666748046875, 240.0],
-            [0.0, 0.0, 1.0]
-        ], dtype=np.float32)
-        self.ir_resolution = (480, 848)  # (H, W) of IR camera
+        # Camera parameter manager - will be initialized after ROS node creation
+        # Use defaults initially, then update from ROS when available
+        self.cam_manager = None
         
-        # RGB camera intrinsics (1280x720 resolution)
-        # From: ros2 topic echo /camera/color/camera_info
-        self.K_rgb = np.array([
-            [693.5951538085938, 0.0, 648.8980102539062],
-            [0.0, 693.14501953125, 361.5228271484375],
-            [0.0, 0.0, 1.0]
-        ], dtype=np.float32)
-        self.rgb_resolution = (720, 1280)  # (H, W) of RGB camera
-        
-        # IR to RGB extrinsic transform
-        # From: ros2 run tf2_ros tf2_echo camera_color_optical_frame camera_left_ir_optical_frame
-        # Note: tf2_echo A B gives transform FROM frame B TO frame A
-        # So tf2_echo rgb ir gives the transform FROM ir TO rgb
-        self.T_ir_to_rgb = np.array([
-            [1.000, -0.000, -0.002, -0.014],
-            [0.001,  1.000,  0.004, -0.000],
-            [0.002, -0.004,  1.000, -0.002],
-            [0.000,  0.000,  0.000,  1.000]
-        ], dtype=np.float32)
+        # Camera intrinsics and extrinsics (will be updated from ROS)
+        # Using defaults as fallback
+        self.K_ir = DEFAULT_IR_K.copy()
+        self.K_rgb = DEFAULT_RGB_K.copy()
+        self.ir_resolution = DEFAULT_IR_RESOLUTION
+        self.rgb_resolution = DEFAULT_RGB_RESOLUTION
+        self.T_ir_to_rgb = DEFAULT_T_IR_TO_RGB.copy()
         
         # Use IR intrinsics for general point cloud operations
         self.K = self.K_ir
-        self.camera_info_received = True
+        self.camera_info_received = False  # Will be set to True after fetching from ROS
         
         # Data buffers
         self.pointcloud = None
@@ -169,6 +159,9 @@ class GraspGenerationNode:
         rclpy.init()
         self.node = rclpy.create_node('grasp_generation_node')
         
+        # Initialize camera parameter manager to fetch params from ROS
+        self.cam_manager = CameraParameterManager(self.node, use_defaults=False)
+        
         # QoS profiles
         sensor_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -197,11 +190,6 @@ class GraspGenerationNode:
             Image, '/camera/depth/image_raw',
             self._depth_callback, sensor_qos)
         
-        # Camera info subscriber
-        self.camera_info_sub = self.node.create_subscription(
-            CameraInfo, '/camera/color/camera_info',
-            self._camera_info_callback, sensor_qos)
-        
         # Grasp poses publisher
         self.grasp_pub = self.node.create_publisher(
             PoseArray, '/grasp_6d/grasp_poses', reliable_qos)
@@ -219,12 +207,18 @@ class GraspGenerationNode:
         logging.info("Subscribing to: /grasp_6d/pointcloud, /grasp_6d/mask, /grasp_6d/highlight_index")
         logging.info("Publishing to: /grasp_6d/grasp_poses")
     
-    def _camera_info_callback(self, msg: 'CameraInfo'):
-        """Update camera intrinsics from CameraInfo message."""
-        if not self.camera_info_received:
-            self.K = np.array(msg.k, dtype=np.float32).reshape(3, 3)
-            logging.info(f"Camera intrinsics updated: fx={self.K[0,0]:.2f}, fy={self.K[1,1]:.2f}")
+    def _update_camera_params(self):
+        """Update camera parameters from CameraParameterManager."""
+        if self.cam_manager is not None and self.cam_manager.is_ready:
+            self.K_ir = self.cam_manager.K_ir
+            self.K_rgb = self.cam_manager.K_rgb
+            self.ir_resolution = self.cam_manager.ir_resolution
+            self.rgb_resolution = self.cam_manager.rgb_resolution
+            self.T_ir_to_rgb = self.cam_manager.T_ir_to_rgb
+            self.K = self.K_ir
             self.camera_info_received = True
+            return True
+        return False
     
     def _pointcloud_callback(self, msg: 'PointCloud2'):
         """Process incoming point cloud."""
@@ -679,16 +673,29 @@ class GraspGenerationNode:
     
     def _run_ros_mode(self):
         """Run in ROS mode with topic subscription/publishing."""
-        logging.info("Running in ROS mode. Waiting for point cloud and mask...")
+        logging.info("Running in ROS mode.")
         logging.info("")
+        
+        # Create spinner thread (needed for camera_info callbacks)
+        spin_thread = threading.Thread(target=lambda: rclpy.spin(self.node), daemon=True)
+        spin_thread.start()
+        
+        # Wait for camera parameters from ROS
+        logging.info("Fetching camera parameters from ROS...")
+        if self.cam_manager.wait_for_camera_info(timeout=10.0):
+            self._update_camera_params()
+            logging.info(f"Camera params: IR {self.ir_resolution[1]}x{self.ir_resolution[0]}, "
+                        f"RGB {self.rgb_resolution[1]}x{self.rgb_resolution[0]}")
+        else:
+            logging.warning("Using default camera parameters")
+            self.camera_info_received = True  # Use defaults
+        
+        logging.info("")
+        logging.info("Waiting for point cloud and mask...")
         logging.info("Required topics:")
         logging.info("  - /grasp_6d/pointcloud (from perception_stereo.py)")
         logging.info("  - /grasp_6d/mask (from segmentation_sam2.py)")
         logging.info("")
-        
-        # Create spinner thread
-        spin_thread = threading.Thread(target=lambda: rclpy.spin(self.node), daemon=True)
-        spin_thread.start()
         
         last_status_time = 0
         

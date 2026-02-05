@@ -52,27 +52,33 @@ except ImportError:
     print("[INFO] Will use file-based communication as fallback.")
 
 
-class FoundationStereoNode:
-    """
-    FoundationStereo depth estimation and point cloud generation.
-    
-    Communicates with ROS via bridge using ZeroMQ or shared files.
-    """
-    
-    # Default camera intrinsics for Gemini 335 IR camera (848x480)
-    # From: ros2 topic echo /camera/left_ir/camera_info
+# Import default camera parameters
+try:
+    from utils.camera_utils import DEFAULT_IR_K, DEFAULT_BASELINE
+except ImportError:
+    # Fallback defaults if utils not available
     DEFAULT_IR_K = np.array([
         [411.666748046875, 0.0, 420.0250244140625],
         [0.0, 411.666748046875, 240.0],
         [0.0, 0.0, 1.0]
     ], dtype=np.float32)
-    DEFAULT_BASELINE = 0.05  # 50mm baseline (from camera_info.json)
+    DEFAULT_BASELINE = 0.05
+
+
+class FoundationStereoNode:
+    """
+    FoundationStereo depth estimation and point cloud generation.
+    
+    Communicates with ROS via bridge using ZeroMQ or shared files.
+    Camera intrinsics are loaded from bridge_data/camera_info.json if available,
+    otherwise falls back to default values.
+    """
     
     def __init__(self, args):
         self.args = args
         self.model = None
-        self.K = self.DEFAULT_IR_K.copy()
-        self.baseline = self.DEFAULT_BASELINE
+        self.K = DEFAULT_IR_K.copy()
+        self.baseline = DEFAULT_BASELINE
         
         # Image buffers
         self.left_image = None

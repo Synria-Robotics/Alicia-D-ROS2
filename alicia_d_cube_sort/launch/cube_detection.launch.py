@@ -83,12 +83,18 @@ def load_calibration_and_create_nodes(context, *args, **kwargs):
             m_calib[:3, :3] = r_calib.as_matrix()
             m_calib[:3, 3] = t_calib
             
-            # Transform from optical frame to link frame (Gemini 335)
+            # Transform from optical frame to link frame
+            # m_internal = np.array([
+            #     [ 0.0, -0.0,  1.0, 0.002],
+            #     [-1.0, -0.0, -0.0, -0.014],
+            #     [ 0.0, -1.0,  0.0, 0.000],
+            #     [ 0.0,  0.0,  0.0, 1.0]
+            # ])
             m_internal = np.array([
-                [ 0.0, -0.0,  1.0, 0.002],
-                [-1.0, -0.0, -0.0, -0.014],
-                [ 0.0, -1.0,  0.0, 0.000],
-                [ 0.0,  0.0,  0.0, 1.0]
+                [ -0.001, -0.001,  1.000, 0.000],
+                [ -1.000, 0.001, -0.001, -0.000],
+                [ -0.001, -1.000,  -0.001, 0.000],
+                [ 0.000,  0.000,  0.000, 1.000]
             ])
             
             # Final transform: T_gripper_link = T_gripper_optical * inv(T_link_optical)
