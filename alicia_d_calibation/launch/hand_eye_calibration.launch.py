@@ -1,4 +1,4 @@
-"""Launch file for hand-eye calibration with Alicia-D robot and Gemini335 camera."""
+"""Launch file for hand-eye calibration with Alicia-D robot and camera."""
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, LogInfo
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
@@ -28,15 +28,21 @@ def generate_launch_description():
         description='Target ArUco marker ID'
     )
     
+    # 根据相机实际话题修改
+    # 若使用Gemini 335，则使用/camera/color/image_raw
+    # 若使用RealSense D405，则使用/camera/camera/color/image_rect_raw
     camera_topic_arg = DeclareLaunchArgument(
         'camera_topic',
-        default_value='/camera/color/image_raw',
+        default_value='/camera/camera/color/image_rect_raw',
         description='Camera image topic'
     )
     
+    # 根据相机实际话题修改
+    # 若使用Gemini 335，则使用/camera/color/camera_info
+    # 若使用RealSense D405，则使用/camera/camera/color/camera_info
     camera_info_topic_arg = DeclareLaunchArgument(
         'camera_info_topic',
-        default_value='/camera/color/camera_info',
+        default_value='/camera/camera/color/camera_info',
         description='Camera info topic'
     )
     

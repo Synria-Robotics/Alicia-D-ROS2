@@ -10,7 +10,7 @@
 #    Gemini 335:
 #    ros2 launch orbbec_camera gemini_335.launch.py
 #    RealSense D405:
-#    ros2 launch alicia_d_calibration verify_calibration.launch.py camera_topic:=/camera/camera/color/image_rect_raw camera_info_topic:=/camera/camera/color/camera_info
+#    ros2 launch realsense2_camera rs_launch.py
 
 
 # 3. 启动此验证文件:
@@ -77,14 +77,7 @@ def load_calibration_result(context, *args, **kwargs):
     m_calib[:3, :3] = r_calib.as_matrix()
     m_calib[:3, 3] = t_calib
 
-    # 2. 构建相机内部矩阵 T_link_optical (Gemini 335)
-    # 这里的数值基于 tf2_echo camera_link camera_color_optical_frame 的结果
-    # Matrix:
-    #  0  0  1  0
-    # -1  0  0  0
-    #  0 -1  0  0
-    #  0  0  0  1
-    # 对应 RPY [-1.57, 0, -1.57]
+    # 2. 构建相机内部矩阵 T_link_optical
     
     # m_internal = np.array([
     #     [ 0.0, -0.0,  1.0, 0.002],
@@ -152,8 +145,14 @@ def generate_launch_description():
     """生成 Launch 描述"""
     calibration_file_arg = DeclareLaunchArgument('calibration_file', default_value='hand_eye_calibration_result.yaml')
     aruco_dict_arg = DeclareLaunchArgument('aruco_dict', default_value='DICT_4X4_50')
-    camera_topic_arg = DeclareLaunchArgument('camera_topic', default_value='/camera/color/image_raw')
-    camera_info_topic_arg = DeclareLaunchArgument('camera_info_topic', default_value='/camera/color/camera_info')
+    # 根据相机实际话题修改
+    # 若使用Gemini 335，则使用/camera/color/image_raw
+    # 若使用RealSense D405，则使用/camera/camera/color/image_rect_raw
+    camera_topic_arg = DeclareLaunchArgument('camera_topic', default_value='/camera/camera/color/image_rect_raw')
+    # 根据相机实际话题修改
+    # 若使用Gemini 335，则使用/camera/color/camera_info
+    # 若使用RealSense D405，则使用/camera/camera/color/camera_info
+    camera_info_topic_arg = DeclareLaunchArgument('camera_info_topic', default_value='/camera/camera/color/camera_info')
     
     return LaunchDescription([
         calibration_file_arg,

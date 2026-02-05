@@ -18,11 +18,22 @@ depth_mode: false
 # -----------------------------------------------------------------------------
 # Camera Topics
 # -----------------------------------------------------------------------------
+# 根据相机实际话题修改
+# 若使用realsense d405:
+# color_topic: "/camera/camera/color/image_rect_raw"
+# color_info_topic: "/camera/camera/color/camera_info"
+# depth_topic: "/camera/camera/depth/image_rect_raw"
+# depth_info_topic: "/camera/camera/depth/camera_info"
+# 若使用gemini 335:
+# color_topic: "/camera/color/image_raw"
+# color_info_topic: "/camera/color/camera_info"
+# depth_topic: "/camera/depth/image_raw"
+# depth_info_topic: "/camera/depth/camera_info"
 camera:
-  color_topic: "/camera/color/image_raw"
-  color_info_topic: "/camera/color/camera_info"
-  depth_topic: "/camera/depth/image_raw"
-  depth_info_topic: "/camera/depth/camera_info"
+  color_topic: "/camera/camera/color/image_rect_raw"
+  color_info_topic: "/camera/camera/color/camera_info"
+  depth_topic: "/camera/camera/depth/image_rect_raw"
+  depth_info_topic: "/camera/camera/depth/camera_info"
 
 # -----------------------------------------------------------------------------
 # Hand-Eye Calibration File Path (relative to alicia_d_calibation package)
@@ -129,9 +140,9 @@ motion:
 # -----------------------------------------------------------------------------
 # Multi-frame confirmation to filter out noise detections
 detection_confirmation:
-  confirm_count: 5         # Number of consecutive frames to confirm detection
-  distance_threshold: 0.01 # Max distance (m) to consider same cube across frames
-  timeout: 2.0             # Timeout (s) to forget unconfirmed detections
+  confirm_count: 5          # Number of consecutive frames to confirm detection
+  distance_threshold: 0.002 # Max distance (m) to consider same cube across frames
+  timeout: 2.0              # Timeout (s) to forget unconfirmed detections
 
 # -----------------------------------------------------------------------------
 # TF Frame Names

@@ -11,7 +11,10 @@ Usage:
    ros2 launch alicia_d_moveit real_robot.launch.py gripper_type:=50mm
 
 2. Start the camera:
+   Gemini 335:
    ros2 launch orbbec_camera gemini_335.launch.py
+   RealSense D405:
+   ros2 launch realsense2_camera rs_launch.py
 
 3. Start cube detection:
    ros2 launch alicia_d_cube_sort cube_detection.launch.py
@@ -185,21 +188,30 @@ def generate_launch_description():
         description='Show OpenCV visualization window'
     )
     
+    # 根据相机实际话题修改
+    # 若使用Gemini 335，则使用/camera/color/image_raw
+    # 若使用RealSense D405，则使用/camera/camera/color/image_rect_raw
     color_topic_arg = DeclareLaunchArgument(
         'color_topic',
-        default_value='/camera/color/image_raw',
+        default_value='/camera/camera/color/image_rect_raw',
         description='Color image topic'
     )
     
+    # 根据相机实际话题修改
+    # 若使用Gemini 335，则使用/camera/color/camera_info
+    # 若使用RealSense D405，则使用/camera/camera/color/camera_info
     color_info_topic_arg = DeclareLaunchArgument(
         'color_info_topic',
-        default_value='/camera/color/camera_info',
+        default_value='/camera/camera/color/camera_info',
         description='Color camera info topic'
     )
     
+    # 根据相机实际话题修改
+    # 若使用Gemini 335，则使用/camera/depth/image_raw
+    # 若使用RealSense D405，则使用/camera/camera/depth/image_rect_raw
     depth_topic_arg = DeclareLaunchArgument(
         'depth_topic',
-        default_value='/camera/depth/image_raw',
+        default_value='/camera/camera/depth/image_rect_raw',
         description='Depth image topic'
     )
     
