@@ -795,6 +795,12 @@ class GraspExecutionNode(Node):
             self.get_logger().info("=" * 60)
             self.get_logger().info("Grasp Execution Node Running (D405)")
             self.get_logger().info("=" * 60)
+            
+            # Open gripper first
+            self.get_logger().info("Opening gripper...")
+            self.open_gripper()
+            time.sleep(0.5)
+            
             self.get_logger().info("Moving to HOME position...")
             
             if self.move_to_home():
@@ -946,7 +952,10 @@ class GraspExecutionNode(Node):
                         if next_action in ['y', 'yes', '']:
                             self.open_gripper()
                             time.sleep(0.5)
-                            self.move_to_home()
+                            if not self.move_to_home():
+                                self.get_logger().error("Failed to return to HOME position!")
+                            else:
+                                self.get_logger().info("Returned to HOME position successfully")
                         
                         self.clear_highlight_in_meshcat()
                         self.workflow_state = "wait_grasps"
@@ -954,7 +963,8 @@ class GraspExecutionNode(Node):
                         return
                     else:
                         self.get_logger().warn("Grasp failed!")
-                        self.move_to_home()
+                        if not self.move_to_home():
+                            self.get_logger().error("Failed to return to HOME position after failed grasp!")
                         continue
         
         input_thread = threading.Thread(target=user_input_thread, daemon=True)

@@ -240,25 +240,29 @@ class FoundationStereoNode:
         if self.zmq_rgb_socket is None:
             return False
         
+        received = False
+        latest_rgb = None
+        
+        # Drain the queue to get the latest RGB image
         try:
-            parts = self.zmq_rgb_socket.recv_multipart(zmq.NOBLOCK)
-            if len(parts) >= 3:
-                header = json.loads(parts[1].decode())
-                shape = tuple(header['shape'])
-                rgb_img = np.frombuffer(parts[2], dtype=np.uint8).reshape(shape)
-                
-                with self.image_lock:
-                    self.rgb_image = rgb_img
-                
-                return True
-                
+            while True:
+                parts = self.zmq_rgb_socket.recv_multipart(zmq.NOBLOCK)
+                if len(parts) >= 3:
+                    header = json.loads(parts[1].decode())
+                    shape = tuple(header['shape'])
+                    latest_rgb = np.frombuffer(parts[2], dtype=np.uint8).reshape(shape)
+                    received = True
         except zmq.Again:
-            return False
+            pass  # No more messages in queue
         except Exception as e:
             logging.debug(f"ZMQ RGB receive error: {e}")
-            return False
         
-        return False
+        # Update with the latest RGB if we got any
+        if latest_rgb is not None:
+            with self.image_lock:
+                self.rgb_image = latest_rgb
+        
+        return received
     
     def _receive_images_file(self) -> bool:
         """Receive images via shared files. Returns True if new images available."""
@@ -324,19 +328,23 @@ class FoundationStereoNode:
         rgb_timestamp_path = os.path.join(self.bridge_dir, 'rgb_timestamp.txt')
         rgb_path = os.path.join(self.bridge_dir, 'rgb.png')
         
-        if not os.path.exists(rgb_timestamp_path):
+        # Also check if we can read RGB directly even without timestamp (if file exists and is recent)
+        if not os.path.exists(rgb_path):
             return False
         
         try:
-            with open(rgb_timestamp_path, 'r') as f:
-                timestamp = float(f.read().strip())
+            # Check timestamp if available
+            new_timestamp = False
+            if os.path.exists(rgb_timestamp_path):
+                with open(rgb_timestamp_path, 'r') as f:
+                    timestamp = float(f.read().strip())
+                
+                if timestamp > self.last_rgb_timestamp:
+                    self.last_rgb_timestamp = timestamp
+                    new_timestamp = True
             
-            if timestamp <= self.last_rgb_timestamp:
-                return False
-            
-            self.last_rgb_timestamp = timestamp
-            
-            if os.path.exists(rgb_path):
+            # Always try to read RGB if we have no RGB yet, or if timestamp is new
+            if new_timestamp or self.rgb_image is None:
                 rgb_img = cv2.imread(rgb_path)
                 if rgb_img is not None:
                     rgb_img = cv2.cvtColor(rgb_img, cv2.COLOR_BGR2RGB)
@@ -457,9 +465,10 @@ class FoundationStereoNode:
         os.makedirs(output_dir, exist_ok=True)
         
         try:
-            # Save depth and xyz_map
+            # Save depth, xyz_map, and colors
             np.save(os.path.join(output_dir, 'depth_meter.npy'), depth)
             np.save(os.path.join(output_dir, 'xyz_map.npy'), xyz_map)
+            np.save(os.path.join(output_dir, 'colors.npy'), colors)  # Save colors for file-based transfer
             
             # Save colored point cloud
             import open3d as o3d
@@ -631,63 +640,91 @@ class FoundationStereoNode:
         logging.info("")
         logging.info("=" * 60)
         
-        visualized = False
+        first_run = True
         rgb_wait_logged = False
         
         try:
             while True:
-                # Try to receive stereo images
-                received_zmq = self._receive_images_zmq()
-                received_file = False
+                # Reset for new inference cycle
+                rgb_wait_logged = False
                 
-                if not received_zmq:
-                    received_file = self._receive_images_file()
+                # Wait for fresh images
+                logging.info("Waiting for stereo and RGB images...")
                 
-                # Try to receive RGB image for coloring
-                self._receive_rgb_zmq()
-                self._receive_rgb_file()
+                # Clear old data to ensure we get fresh images
+                with self.image_lock:
+                    self.new_image_available = False
+                    self.rgb_image = None
                 
-                if not received_zmq and not received_file:
+                # Wait until we have both stereo and RGB
+                got_stereo = False
+                got_rgb = False
+                wait_start = time.time()
+                
+                while not (got_stereo and got_rgb):
+                    # Try to receive stereo images
+                    received_zmq = self._receive_images_zmq()
+                    received_file = False
+                    
+                    if not received_zmq:
+                        received_file = self._receive_images_file()
+                    
+                    if received_zmq or received_file:
+                        got_stereo = True
+                    
+                    # Try to receive RGB image for coloring
+                    self._receive_rgb_zmq()
+                    self._receive_rgb_file()
+                    
+                    with self.image_lock:
+                        if self.rgb_image is not None:
+                            got_rgb = True
+                    
+                    # Log waiting status
+                    if not got_rgb and not rgb_wait_logged and got_stereo:
+                        logging.info("Stereo received, waiting for RGB image...")
+                        rgb_wait_logged = True
+                    
+                    # Timeout check (30 seconds)
+                    if time.time() - wait_start > 30.0:
+                        if not got_stereo:
+                            logging.warning("Timeout waiting for stereo images")
+                        if not got_rgb:
+                            logging.warning("Timeout waiting for RGB, will use grayscale")
+                            got_rgb = True  # Continue without RGB
+                        break
+                    
                     time.sleep(0.01)
-                    continue
                 
                 # Get images
                 with self.image_lock:
-                    if not self.new_image_available:
+                    if self.left_image is None or self.right_image is None:
+                        logging.warning("No stereo images available, waiting...")
+                        time.sleep(0.1)
                         continue
+                    
                     left_img = self.left_image.copy()
                     right_img = self.right_image.copy()
                     rgb_img = self.rgb_image.copy() if self.rgb_image is not None else None
-                    
-                    # If visualizing and RGB not yet available, wait for it
-                    # Don't consume the stereo frame yet
-                    if self.args.visualize and not visualized and rgb_img is None:
-                        if not rgb_wait_logged:
-                            logging.info("Waiting for RGB image to enable colored visualization...")
-                            rgb_wait_logged = True
-                        # Keep new_image_available = True so we reprocess this frame when RGB arrives
-                        continue
-                    
                     self.new_image_available = False
                 
                 self.frame_count += 1
                 
-                # Log source
-                if not getattr(self, '_frame_logged', False):
-                    source = "ZMQ" if received_zmq else "file"
-                    logging.info(f"Receiving stereo images via {source} ({left_img.shape[1]}x{left_img.shape[0]})")
-                    if rgb_img is not None:
-                        logging.info(f"RGB image available for coloring ({rgb_img.shape[1]}x{rgb_img.shape[0]})")
-                    else:
-                        logging.warning("RGB image not available, using grayscale colors")
-                    self._frame_logged = True
+                # Log source and RGB status
+                logging.info(f"Processing frame {self.frame_count}...")
+                if rgb_img is not None:
+                    logging.info(f"  Stereo: {left_img.shape[1]}x{left_img.shape[0]}, RGB: {rgb_img.shape[1]}x{rgb_img.shape[0]}")
+                else:
+                    logging.warning(f"  Stereo: {left_img.shape[1]}x{left_img.shape[0]}, RGB: not available (using grayscale)")
                 
                 # Run inference
+                logging.info("Running FoundationStereo inference...")
                 depth, xyz_map, disp = self.run_inference(left_img, right_img)
                 
                 # Color point cloud using RGB
                 if rgb_img is not None:
                     colors = self._color_pointcloud_with_rgb(xyz_map, rgb_img)
+                    logging.info(f"  Point cloud colored with RGB (colors range: {colors.min()}-{colors.max()})")
                 else:
                     # Fallback: use grayscale from IR
                     if left_img.ndim == 2:
@@ -695,16 +732,44 @@ class FoundationStereoNode:
                     else:
                         gray = cv2.cvtColor(left_img, cv2.COLOR_RGB2GRAY)
                     colors = np.stack([gray, gray, gray], axis=-1)
+                    logging.info("  Point cloud colored with grayscale (no RGB)")
                 
-                # Publish/save colored point cloud
+                # Visualize only on first run if --visualize flag is set
+                # Do this BEFORE publishing so GraspGen receives fresh data after visualization
+                if first_run and self.args.visualize:
+                    logging.info("")
+                    logging.info("Opening point cloud visualization...")
+                    logging.info("Close the visualization window to continue.")
+                    self.visualize_frame(left_img, disp, xyz_map, depth, colors)
+                    logging.info("Visualization closed.")
+                
+                # On first run without visualization, wait a moment for GraspGen to be ready
+                if first_run and not self.args.visualize:
+                    logging.info("")
+                    logging.info("First inference complete. Waiting 2 seconds for GraspGen to be ready...")
+                    time.sleep(2.0)
+                
+                first_run = False
+                
+                # Publish/save colored point cloud (after visualization so GraspGen gets fresh data)
                 self._publish_pointcloud_zmq(xyz_map, colors)
                 self._save_pointcloud_file(xyz_map, colors, depth)
                 
-                # Visualize first frame if requested (only when RGB is available for colored view)
-                if self.args.visualize and not visualized:
-                    self.visualize_frame(left_img, disp, xyz_map, depth, colors)
-                    visualized = True
-                    logging.info("Visualization closed. Continuing to process...")
+                logging.info("")
+                logging.info("=" * 50)
+                logging.info("Point cloud published successfully!")
+                logging.info("=" * 50)
+                
+                # Wait for user to press Enter to re-run
+                logging.info("")
+                logging.info("Press Enter to regenerate point cloud, or Ctrl+C to quit...")
+                try:
+                    input()
+                    logging.info("")
+                    logging.info("Regenerating point cloud...")
+                except EOFError:
+                    # Non-interactive mode - wait a bit and continue
+                    time.sleep(1.0)
                 
         except KeyboardInterrupt:
             logging.info("Shutting down...")

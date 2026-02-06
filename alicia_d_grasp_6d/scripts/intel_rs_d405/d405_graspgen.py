@@ -228,10 +228,17 @@ class GraspGenerationNode:
         """Process incoming point cloud with RGB colors."""
         points, colors = self._parse_pointcloud2(msg)
         
-        with self.data_lock:
-            self.pointcloud = points
-            self.pointcloud_colors = colors
-            self.new_data_available = True
+        if len(points) > 0:
+            with self.data_lock:
+                self.pointcloud = points
+                self.pointcloud_colors = colors
+                self.new_data_available = True
+            
+            # Log first reception and color info
+            if not getattr(self, '_pc_received_logged', False):
+                color_info = f"colors: {colors.shape}, range: [{colors.min()}-{colors.max()}]" if colors is not None and len(colors) > 0 else "no colors"
+                logging.info(f"Point cloud received: {len(points)} points, {color_info}")
+                self._pc_received_logged = True
     
     def _mask_callback(self, msg: 'Image'):
         """Process incoming mask."""
@@ -584,10 +591,30 @@ class GraspGenerationNode:
             grasps_centered = grasps.copy()
             grasps_centered[:, :3, 3] -= pc_center
             
-            # Visualize COLORED object point cloud
-            # object_colors should already have RGB values from the camera
+            # Ensure colors are valid - must have same length as points
+            if object_colors is None or len(object_colors) != len(object_points):
+                logging.warning(f"Invalid colors: {len(object_colors) if object_colors is not None else 'None'} vs {len(object_points)} points")
+                # Use default gray if colors are invalid
+                vis_colors = np.ones((len(object_points), 3), dtype=np.uint8) * 128
+            else:
+                # meshcat expects colors in 0-255 uint8 scale
+                if object_colors.dtype != np.uint8:
+                    if object_colors.max() <= 1.0:
+                        # Convert from [0, 1] to [0, 255]
+                        vis_colors = (object_colors * 255).astype(np.uint8)
+                    else:
+                        vis_colors = object_colors.astype(np.uint8)
+                else:
+                    vis_colors = object_colors.copy()
+            
+            # Log color statistics for debugging
+            logging.info(f"Visualizing point cloud: {len(pc_centered)} points, "
+                        f"colors: min={vis_colors.min()}, max={vis_colors.max()}, "
+                        f"mean={vis_colors.mean():.1f}")
+            
+            # Visualize COLORED object point cloud (meshcat expects 0-255 scale)
             visualize_pointcloud(self.vis, "object_pc", pc_centered, 
-                               object_colors, size=0.003)
+                               vis_colors, size=0.003)
             
             # Visualize coordinate frame at origin
             make_frame(self.vis, "origin", h=0.1, radius=0.003)
@@ -733,6 +760,11 @@ class GraspGenerationNode:
                     depth = self.depth_image.copy() if self.depth_image is not None else None
                     self.new_data_available = False
                 
+                # Log data state
+                logging.info(f"Processing data: {len(pointcloud)} points, "
+                           f"colors: {colors.shape if colors is not None else 'None'}, "
+                           f"mask: {mask.shape}")
+                
                 # Extract object points from mask (with RGB colors)
                 object_points, object_colors = self.extract_object_points(
                     pointcloud, colors, mask, depth)
@@ -740,6 +772,8 @@ class GraspGenerationNode:
                 if len(object_points) == 0:
                     logging.warning("No object points extracted, skipping...")
                     continue
+                
+                logging.info(f"Extracted {len(object_points)} object points with colors")
                 
                 # Preprocess for GraspGen
                 processed_points = self.preprocess_points(object_points, 
@@ -777,6 +811,43 @@ class GraspGenerationNode:
                 try:
                     input()
                     logging.info("Regenerating grasps...")
+                    
+                    # Reset all cached data to force fetching fresh data
+                    with self.data_lock:
+                        self.pointcloud = None
+                        self.pointcloud_colors = None
+                        self.mask = None
+                        self.depth_image = None
+                        self.new_data_available = False
+                    
+                    # Reset grasp results
+                    with self.grasp_lock:
+                        self.grasp_poses = None
+                        self.grasp_confidences = None
+                    
+                    # Reset visualization state
+                    self.vis_pc_center = None
+                    self.vis_grasps_centered = None
+                    self.vis_confidences = None
+                    
+                    # Reset highlight state
+                    with self.highlight_lock:
+                        self.highlight_index = -1
+                        self.highlight_pending = False
+                    
+                    # Clear meshcat
+                    if self.vis is not None:
+                        try:
+                            self.vis.delete()
+                        except:
+                            pass
+                    
+                    # Reset logging flags so we see when new data arrives
+                    self._mask_received_logged = False
+                    self._pc_received_logged = False
+                    
+                    logging.info("Waiting for new point cloud and mask...")
+                    
                 except EOFError:
                     # Non-interactive mode, continue
                     pass

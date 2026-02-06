@@ -384,6 +384,7 @@ class ROSBridge(Node):
             output_dir = os.path.join(os.path.dirname(__file__), 'outputs')
             pc_timestamp_path = os.path.join(output_dir, 'pc_timestamp.txt')
             xyz_map_path = os.path.join(output_dir, 'xyz_map.npy')
+            colors_path = os.path.join(output_dir, 'colors.npy')
             
             if os.path.exists(pc_timestamp_path) and os.path.exists(xyz_map_path):
                 try:
@@ -393,19 +394,37 @@ class ROSBridge(Node):
                     if timestamp > self.last_pc_timestamp:
                         self.last_pc_timestamp = timestamp
                         
-                        # Load xyz_map and create point cloud data
+                        # Load xyz_map and colors
                         xyz_map = np.load(xyz_map_path)
                         points = xyz_map.reshape(-1, 3)
+                        
+                        # Load colors if available
+                        if os.path.exists(colors_path):
+                            colors = np.load(colors_path)
+                            colors = colors.reshape(-1, 3)
+                        else:
+                            colors = None
+                        
                         valid_mask = (points[:, 2] > 0) & (points[:, 2] < 3.0)
                         points = points[valid_mask].astype(np.float32)
                         
+                        # Apply same mask to colors
+                        if colors is not None and len(colors) == len(valid_mask):
+                            colors = colors[valid_mask].astype(np.uint8)
+                        else:
+                            colors = None
+                        
                         if len(points) > 0:
-                            # Create packed data
+                            # Create packed data with colors
                             import struct
                             data = []
                             for i in range(len(points)):
                                 x, y, z = points[i]
-                                rgb = 0x808080  # Gray color
+                                if colors is not None and i < len(colors):
+                                    r, g, b = colors[i]
+                                    rgb = struct.unpack('I', struct.pack('BBBB', b, g, r, 0))[0]
+                                else:
+                                    rgb = 0x808080  # Gray fallback
                                 data.append(struct.pack('fffI', x, y, z, rgb))
                             
                             pc_data = b''.join(data)
@@ -414,7 +433,8 @@ class ROSBridge(Node):
                                 'frame_id': 'camera_link',
                             }
                             if not getattr(self, '_pc_file_logged', False):
-                                self.get_logger().info(f"Loaded PC from file: {len(points)} points")
+                                color_status = "with colors" if colors is not None else "gray (no colors)"
+                                self.get_logger().info(f"Loaded PC from file: {len(points)} points {color_status}")
                                 self._pc_file_logged = True
                             
                 except Exception as e:
