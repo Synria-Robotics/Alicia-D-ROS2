@@ -4,22 +4,6 @@ Alicia-D 机械臂手眼标定脚本 (Eye-in-Hand)
 
 使用 ArUco 标记和 Gemini335 相机进行手眼标定。
 标定完成后，输出机械臂末端到相机的变换矩阵，保存在../config/hand_eye_calibration_result.yaml
-
-配置环境：
-    conda create -n calib python=3.10 -y
-    conda activate calib
-    conda install pip -y
-    python -m pip install "numpy<2.0.0" "opencv-python<4.11" scipy pyyaml jinja2 typeguard
-
-运行前需要先启动机械臂和相机:
-    1. 启动机械臂:
-       ros2 launch alicia_d_moveit real_robot.launch.py gripper_type:=50mm
-    
-    2. 启动 Gemini335 相机:
-       ros2 launch orbbec_camera gemini_335.launch.py
-
-    3. 运行此标定脚本:
-       ros2 launch alicia_d_calibration hand_eye_calibration.launch.py
 """
 
 import sys

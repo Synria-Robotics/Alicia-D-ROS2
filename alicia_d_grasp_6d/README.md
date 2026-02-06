@@ -33,16 +33,35 @@ cd ..
 ```bash
 ros2 launch alicia_d_moveit real_robot.launch.py
 ```
-相机需打开左右目红外：
+
+若使用 Realsense D405 相机（推荐）：
+
 ```bash
-ros2 launch orbbec_camera gemini_330_series.launch.py enable_left_ir:=true enable_right_ir:=true
+ros2 launch realsense2_camera rs_launch.py \
+    enable_infra1:=true \
+    enable_infra2:=true \
+    infra_rgb:=true \
+    pointcloud.enable:=true
 ```
+
+若使用 Gemini 335 相机：
+```bash
+ros2 launch orbbec_camera gemini_330_series.launch.py \
+    enable_left_ir:=true \
+    enable_right_ir:=true \
+    enable_point_cloud:=true \
+    enable_colored_point_cloud:=true
+```
+
+> 推荐使用 Intel Realsense D405 相机，在本6D抓取代码中，使用该型号相机支持彩色点云。使用Orbbec Gemini 335 相机暂不支持彩色点云，如有需要，可自行修改相关代码。
+> 
+> 以下内容均以 Intel Realsense D405 相机为例，若使用 Orbbec Gemini 335 相机，请相应地修改文件路径和文件名。
 
 ### 2. 启动 ROS 桥接节点
 
 ```bash
 # 系统 Python 环境
-python gemini_ros_bridge.py
+python3 d405_ros_bridge.py
 ```
 
 ### 3. 启动 MeshCat 可视化服务器
@@ -58,7 +77,7 @@ meshcat-server
 
 ```bash
 # 系统 Python 环境（退出conda）
-python gemini_execution.py
+python3 d405_execution.py
 ```
 
 **交互操作**:
@@ -71,48 +90,46 @@ python gemini_execution.py
 ```bash
 # FoundationStereo 环境
 conda activate foundation_stereo
-python gemini_foundationstereo.py --visualize
+python d405_foundationstereo.py --visualize
 ```
 
 **参数**:
 - `--ckpt_dir`: 模型权重路径
-- `--scale`: 图像缩放比例（默认 1.0）
-- `--z_far`: 最大深度（默认 3.0m）
+- `--scale`: 图像缩放比例
+- `--z_far`: 最大深度
 - `--denoise_cloud`: 启用点云去噪（默认开启）
 
-> 该节点推理过程较长，需稍适等待。输出深度图后，按q退出图片，继续进行以下操作。
+> 该节点推理过程较长，需稍适等待。输出深度图后，按q退出图片，方可发布点云话题。
 
-> 该节点非实时推理，如相机视野场景改变，需重新运行。
 
-<p align="center"><img src="../../../imgs/Gemini335_FoundationStereo.png" width="500" /></p>
+<p align="center"><img src="../imgs/D405_FoundationStereo.png" width="500" /></p>
 
 ### 6. 启动目标分割节点（SAM2）
 
 ```bash
 # SAM2 环境
 conda activate sam2
-python gemini_sam2.py
+python d405_sam2.py
 ```
 
 **参数**:
 - `--model`: 模型大小 [tiny/small/base/large]（默认 large）
-- `--bridge_port`: ZeroMQ 端口（默认 5557）
+- `--bridge_port`: ZeroMQ 端口
 
 **交互操作**:
 - 左键点击：添加正样本点（目标区域）
 - 右键点击：添加负样本点（背景区域）
-- `r` 键：重置选择
-- `Enter`：确认分割
+- `r` 键：重置
 - `q`：退出
 
-<p align="center"><img src="../../../imgs/Gemini335_sam2.png" width="500" /></p>
+<p align="center"><img src="../imgs/D405_sam2.png" width="500" /></p>
 
 ### 7. 启动抓取生成节点（GraspGen）
 
 ```bash
 # GraspGen 环境
 conda activate graspgen
-python gemini_graspgen.py
+python d405_graspgen.py
 ```
 
 **参数**:
@@ -121,17 +138,17 @@ python gemini_graspgen.py
 - `--num_grasps`: 生成抓取数量（默认 200）
 - `--topk_num_grasps`: 返回 top-k 抓取（默认 100）
 
-<p align="center"><img src="../../../imgs/Gemini335_GraspGen.png" width="500" /></p>
+<p align="center"><img src="../imgs/D405_GraspGen.png" width="500" /></p>
 
 ## 文件说明
 
 | 文件 | 功能 |
 |------|------|
-| `gemini_ros_bridge.py` | ROS 2 与 ZeroMQ 桥接，转发相机图像 |
-| `gemini_foundationstereo.py` | FoundationStereo 深度估计，生成点云 |
-| `gemini_sam2.py` | SAM2 交互式目标分割 |
-| `gemini_graspgen.py` | GraspGen 抓取位姿生成 |
-| `gemini_execution.py` | MoveIt 2 抓取执行 |
+| `d405_ros_bridge.py` | ROS 2 与 ZeroMQ 桥接，转发相机图像 |
+| `d405_foundationstereo.py` | FoundationStereo 深度估计，生成点云 |
+| `d405_sam2.py` | SAM2 交互式目标分割 |
+| `d405_graspgen.py` | GraspGen 抓取位姿生成 |
+| `d405_execution.py` | MoveIt 2 抓取执行 |
 | `utils/transform_utils.py` | 坐标变换工具函数 |
 
 ## 数据目录

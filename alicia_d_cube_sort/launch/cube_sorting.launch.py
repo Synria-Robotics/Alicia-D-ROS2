@@ -4,25 +4,6 @@ Cube Sorting Launch File
 
 This launch file starts the cube sorting node which controls the robot arm
 to sort cubes by color into designated drop zones.
-
-Prerequisites:
-1. Robot is running:
-   ros2 launch alicia_d_moveit real_robot.launch.py gripper_type:=50mm
-
-2. Camera is running:
-   ros2 launch orbbec_camera gemini_335.launch.py
-
-3. Cube detection is running:
-   ros2 launch alicia_d_cube_sort cube_detection.launch.py
-
-Usage:
-   ros2 launch alicia_d_cube_sort cube_sorting.launch.py
-
-Parameters:
-- auto_start: Automatically start sorting workflow
-
-Author: Synria Robotics
-Date: 2026-01
 """
 
 import os

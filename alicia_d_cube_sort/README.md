@@ -3,9 +3,9 @@
 本模块为 Alicia-D 机械臂提供完整的颜色识别和自动分拣功能，可以通过彩色相机检测工作区内的立方体，并按照颜色自动分拣到指定位置。
 
 > [!warning]
-> 本模块以 Gemini335 相机为例，相机配置参考[OrbbecSDK ROS2 Wrapper v2](https://github.com/orbbec/OrbbecSDK_ROS2)。如使用其它相机，可能需要修改相关文件。
+> 本模块以 Intel Realsense D405 和 Orbbec Gemini 335 相机为例。如使用其它相机，可能需要修改相关文件。
 
-相关模块： [alicia_d_calibation](../alicia_d_calibation) - 手眼标定
+前置模块： [alicia_d_calibation](../alicia_d_calibation) - 手眼标定
 
 ## 📋 模块说明
 
@@ -70,8 +70,23 @@ ros2 launch alicia_d_moveit real_robot.launch.py gripper_type:=50mm
 ```
 
 **终端 2：启动相机驱动**
+
+若使用 Realsense D405 相机：
 ```bash
-ros2 launch orbbec_camera gemini_335.launch.py
+ros2 launch realsense2_camera rs_launch.py \
+    enable_infra1:=true \
+    enable_infra2:=true \
+    infra_rgb:=true \
+    pointcloud.enable:=true
+```
+
+若使用 Gemini 335 相机：
+```bash
+ros2 launch orbbec_camera gemini_330_series.launch.py \
+    enable_left_ir:=true \
+    enable_right_ir:=true \
+    enable_point_cloud:=true \
+    enable_colored_point_cloud:=true
 ```
 
 ### 3. 运行立方体检测
@@ -84,11 +99,21 @@ ros2 launch orbbec_camera gemini_335.launch.py
 conda activate 2d
 ```
 
-启动检测节点：
+启动检测节点（默认适配Realsense D405）：
 
 ```bash
 ros2 launch alicia_d_cube_sort cube_detection.launch.py
 ```
+
+若使用 Gemini 335 相机，请添加参数：
+
+```bash
+ros2 launch alicia_d_cube_sort cube_detection.launch.py \
+    camera_topic:=/camera/color/image_raw \
+    camera_info_topic:=/camera/color/camera_info
+```
+
+<p align="center"><img src="../imgs/alicia_d_cube_sort.png" width="500" /></p>
 
 ### 4. 运行立方体分拣
 

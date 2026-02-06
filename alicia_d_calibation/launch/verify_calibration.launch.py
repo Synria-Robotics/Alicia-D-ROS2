@@ -1,27 +1,4 @@
 # #!/usr/bin/env python3
-# """
-# 手眼标定结果验证 Launch 文件
-
-# 使用方法:
-# 1. 启动机械臂:
-#    ros2 launch alicia_d_moveit real_robot.launch.py gripper_type:=50mm
-
-# 2. 启动相机:
-#    Gemini 335:
-#    ros2 launch orbbec_camera gemini_335.launch.py
-#    RealSense D405:
-#    ros2 launch realsense2_camera rs_launch.py
-
-
-# 3. 启动此验证文件:
-#    ros2 launch alicia_d_calibration verify_calibration.launch.py
-
-# 4. 查看 TF 树:
-#    ros2 run rqt_tf_tree rqt_tf_tree --force-discover 
-
-# 5. 验证标定结果 (将标记放置在标定时的位置):
-#    ros2 run tf2_ros tf2_echo base_link aruco_marker_frame
-# """
 
 import os
 import yaml

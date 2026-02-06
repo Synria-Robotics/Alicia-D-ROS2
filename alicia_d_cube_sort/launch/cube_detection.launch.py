@@ -5,26 +5,6 @@ Cube Detection Launch File
 This launch file starts the cube detection node along with the hand-eye 
 calibration TF publisher. It loads camera intrinsics/extrinsics and publishes
 the static TF between gripper_center and camera_link.
-
-Usage:
-1. Start the robot:
-   ros2 launch alicia_d_moveit real_robot.launch.py gripper_type:=50mm
-
-2. Start the camera:
-   Gemini 335:
-   ros2 launch orbbec_camera gemini_335.launch.py
-   RealSense D405:
-   ros2 launch realsense2_camera rs_launch.py
-
-3. Start cube detection:
-   ros2 launch alicia_d_cube_sort cube_detection.launch.py
-
-Parameters:
-- depth_mode: Use depth camera (true) or A4 paper plane method (false)
-- show_image: Show OpenCV visualization window
-
-Author: Synria Robotics
-Date: 2026-01
 """
 
 import os
