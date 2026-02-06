@@ -57,6 +57,41 @@ alicia_d_moveit/
 │   └── ...                                       # 其他启动文件
 └── package.xml
 
+alicia_d_calibration/
+├── scripts/
+│   ├── hand_eye_calibration.py                   # 手眼标定主脚本
+│   ├── generate_calibration_poses.py             # 生成标定位置序列
+│   └── aruco_detector.py                         # ArUco 标记检测器
+├── launch/
+│   ├── hand_eye_calibration.launch.py            # 标定启动文件
+│   └── verify_calibration.launch.py              # 标定验证启动文件
+├── config/
+│   └── hand_eye_calibration_result.yaml          # 标定结果输出文件
+├── package.xml
+├── CMakeLists.txt
+└── README.md
+
+alicia_d_cube_sort/
+├── scripts/
+│   ├── cube_detection.py                        # 立方体检测节点
+│   └── cube_sorting.py                          # 分拣控制节点
+├── launch/
+│   ├── cube_detection.launch.py                 # 检测启动文件
+│   └── cube_sorting.launch.py                   # 分拣启动文件
+├── config/
+│   └── cube_sorting.yaml                        # 配置文件
+├── alicia_d_cube_sort/
+│   ├── __init__.py                              # Python 包初始化
+│   └── utils/                                   # 辅助工具模块
+├── package.xml
+├── CMakeLists.txt
+└── README.md
+
+alicia_d_grasp_6d/
+├── scripts/
+│   ├── intel_rs_d405                            # Realsense D405 相关脚本
+│   └──  orbbec_gemini_335                       # Orbbec Gemini 335 相关脚本
+└── README.md
 ```
 
 ## 快速开始
