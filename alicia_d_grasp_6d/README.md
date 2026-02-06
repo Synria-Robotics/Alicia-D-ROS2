@@ -1,6 +1,6 @@
-# Orbbec Gemini 335 6D 抓取
+# 6D 抓取
 
-基于 Orbbec Gemini 335 双目相机的 6D 抓取位姿生成与执行系统。
+基于 Intel RealSense D405 和 Orbbec Gemini 335 双目相机的 6D 抓取位姿生成与执行系统。
 
 ## 配置
 
