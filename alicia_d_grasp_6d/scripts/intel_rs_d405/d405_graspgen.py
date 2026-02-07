@@ -29,7 +29,7 @@ from collections import deque
 
 # Add GraspGen to path
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-GRASPGEN_DIR = os.path.join(SCRIPT_DIR, '..', '..', 'GraspGen')
+GRASPGEN_DIR = os.path.join(SCRIPT_DIR, '..', '..', 'Models', 'GraspGen')
 sys.path.insert(0, GRASPGEN_DIR)
 
 # ROS 2 imports

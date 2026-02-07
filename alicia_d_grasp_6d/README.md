@@ -6,14 +6,11 @@
 
 ### 获取源码
 
-在 ``alicia_d_grasp_6d/`` 目录下：
+在 ``alicia_d_grasp_6d/Models`` 目录下：
 ```bash
 git clone https://github.com/NVlabs/GraspGen.git
 git clone https://github.com/NVlabs/FoundationStereo.git
-mkdir SAM2
-cd SAM2
 git clone https://github.com/facebookresearch/sam2.git
-cd ..
 ```
 相应地，您需要创建三个conda虚拟环境，建议命名 ``GraspGen``, ``foundation_stereo``, ``sam2``。虚拟环境的创建和配置须参考官方文档：
 

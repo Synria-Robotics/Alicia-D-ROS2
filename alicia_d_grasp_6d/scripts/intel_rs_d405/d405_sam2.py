@@ -34,7 +34,7 @@ from collections import deque
 
 # Add SAM2 to path - must be done before importing sam2
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-SAM2_DIR = os.path.join(SCRIPT_DIR, '..', '..', 'SAM2', 'sam2')
+SAM2_DIR = os.path.join(SCRIPT_DIR, '..', '..', 'Models', 'sam2')
 sys.path.insert(0, SAM2_DIR)
 
 # ROS 2 imports - handle gracefully for conda environments

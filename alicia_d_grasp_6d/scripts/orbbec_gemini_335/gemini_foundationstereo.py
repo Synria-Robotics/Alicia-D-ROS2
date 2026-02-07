@@ -34,7 +34,7 @@ from collections import deque
 
 # Add FoundationStereo to path
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-FOUNDATION_STEREO_DIR = os.path.join(SCRIPT_DIR, '..', '..', 'FoundationStereo')
+FOUNDATION_STEREO_DIR = os.path.join(SCRIPT_DIR, '..', '..', 'Models', 'FoundationStereo')
 sys.path.insert(0, FOUNDATION_STEREO_DIR)
 
 from omegaconf import OmegaConf
