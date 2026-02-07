@@ -15,7 +15,7 @@ cd SAM2
 git clone https://github.com/facebookresearch/sam2.git
 cd ..
 ```
-相应地，您需要创建三个conda虚拟环境，建议命名 ``graspgen``, ``foundation_stereo``, ``sam2``。虚拟环境的创建和配置须参考官方文档：
+相应地，您需要创建三个conda虚拟环境，建议命名 ``GraspGen``, ``foundation_stereo``, ``sam2``。虚拟环境的创建和配置须参考官方文档：
 
 [GraspGen](https://github.com/NVlabs/GraspGen)
 
@@ -55,7 +55,7 @@ ros2 launch orbbec_camera gemini_330_series.launch.py \
 
 > 推荐使用 Intel Realsense D405 相机，在本6D抓取代码中，使用该型号相机支持彩色点云。使用Orbbec Gemini 335 相机暂不支持彩色点云，如有需要，可自行修改相关代码。
 > 
-> 以下内容均以 Intel Realsense D405 相机为例，若使用 Orbbec Gemini 335 相机，请相应地修改文件路径和文件名。
+> 以下内容均以 Intel Realsense D405 相机为例，若使用 Orbbec Gemini 335 相机，请相应修改文件路径和文件名。
 
 ### 2. 启动 ROS 桥接节点
 
@@ -68,10 +68,10 @@ python3 d405_ros_bridge.py
 
 ```bash
 # graspgen 环境
-conda activate graspgen
+conda activate GraspGen
 meshcat-server
 ```
-在浏览器中打开输出连接。
+在浏览器中打开输出链接。
 
 ### 4. 启动抓取执行节点
 
@@ -128,7 +128,7 @@ python d405_sam2.py
 
 ```bash
 # GraspGen 环境
-conda activate graspgen
+conda activate GraspGen
 python d405_graspgen.py
 ```
 
