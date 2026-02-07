@@ -238,28 +238,39 @@ class SAM2SegmentationNode:
             logging.error(f"Error processing image: {e}")
     
     def _receive_image_from_bridge(self) -> bool:
-        """Receive RGB image from bridge. Returns True if new image available."""
+        """Receive RGB image from bridge. Returns True if new image available.
+        
+        Drains the ZMQ queue and keeps only the latest image to avoid
+        displaying stale frames.
+        """
         # Try ZeroMQ first
         if hasattr(self, 'zmq_rgb_socket') and self.zmq_rgb_socket is not None:
+            latest_img = None
+            received = False
+            
+            # Drain the queue to get the latest RGB image
             try:
-                parts = self.zmq_rgb_socket.recv_multipart(zmq.NOBLOCK)
-                if len(parts) >= 3:
-                    header = json.loads(parts[1].decode())
-                    shape = tuple(header['shape'])
-                    img = np.frombuffer(parts[2], dtype=np.uint8).reshape(shape)
-                    
-                    with self.image_lock:
-                        # Check if we need to reset embedding
-                        if self.current_image is None or self.current_image.shape != img.shape:
-                            with self.embedding_lock:
-                                self.image_embedded = False
-                        self.current_image = img
-                        self.new_image_available = True
-                    return True
+                while True:
+                    parts = self.zmq_rgb_socket.recv_multipart(zmq.NOBLOCK)
+                    if len(parts) >= 3:
+                        header = json.loads(parts[1].decode())
+                        shape = tuple(header['shape'])
+                        latest_img = np.frombuffer(parts[2], dtype=np.uint8).reshape(shape)
+                        received = True
             except zmq.Again:
-                pass
+                pass  # No more messages in queue
             except Exception as e:
                 logging.debug(f"ZMQ receive error: {e}")
+            
+            if latest_img is not None:
+                with self.image_lock:
+                    # Check if we need to reset embedding
+                    if self.current_image is None or self.current_image.shape != latest_img.shape:
+                        with self.embedding_lock:
+                            self.image_embedded = False
+                    self.current_image = latest_img
+                    self.new_image_available = True
+                return True
         
         # Fall back to file-based
         rgb_path = os.path.join(self.bridge_dir, 'rgb.png')

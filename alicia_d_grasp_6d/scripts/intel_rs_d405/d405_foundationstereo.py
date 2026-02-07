@@ -193,47 +193,64 @@ class FoundationStereoNode:
         logging.info(f"File-based communication: {self.bridge_dir}")
     
     def _receive_images_zmq(self) -> bool:
-        """Receive stereo images via ZeroMQ. Returns True if new images received."""
+        """Receive stereo images via ZeroMQ. Returns True if new images received.
+        
+        Drains the entire ZMQ queue and keeps only the latest stereo pair.
+        This prevents using stale frames that accumulated during inference.
+        """
         if self.zmq_sub_socket is None:
             return False
         
+        received = False
+        latest_left = None
+        latest_right = None
+        latest_camera_info = {}
+        drained_count = 0
+        
+        # Drain the queue to get the latest stereo images
         try:
-            parts = self.zmq_sub_socket.recv_multipart(zmq.NOBLOCK)
-            if len(parts) >= 4:
-                topic = parts[0].decode()
-                header = json.loads(parts[1].decode())
-                left_data = parts[2]
-                right_data = parts[3]
-                
-                # Reconstruct images
-                left_shape = tuple(header['left_shape'])
-                right_shape = tuple(header['right_shape'])
-                
-                left_img = np.frombuffer(left_data, dtype=np.uint8).reshape(left_shape)
-                right_img = np.frombuffer(right_data, dtype=np.uint8).reshape(right_shape)
-                
-                # Update camera info if provided
-                camera_info = header.get('camera_info', {})
-                if camera_info:
-                    if 'K' in camera_info:
-                        self.K = np.array(camera_info['K'], dtype=np.float32).reshape(3, 3)
-                    if 'baseline' in camera_info:
-                        self.baseline = camera_info['baseline']
-                
-                with self.image_lock:
-                    self.left_image = left_img
-                    self.right_image = right_img
-                    self.new_image_available = True
-                
-                return True
-                
+            while True:
+                parts = self.zmq_sub_socket.recv_multipart(zmq.NOBLOCK)
+                if len(parts) >= 4:
+                    topic = parts[0].decode()
+                    header = json.loads(parts[1].decode())
+                    left_data = parts[2]
+                    right_data = parts[3]
+                    
+                    left_shape = tuple(header['left_shape'])
+                    right_shape = tuple(header['right_shape'])
+                    
+                    latest_left = np.frombuffer(left_data, dtype=np.uint8).reshape(left_shape)
+                    latest_right = np.frombuffer(right_data, dtype=np.uint8).reshape(right_shape)
+                    
+                    camera_info = header.get('camera_info', {})
+                    if camera_info:
+                        latest_camera_info = camera_info
+                    
+                    drained_count += 1
+                    received = True
         except zmq.Again:
-            return False
+            pass  # No more messages in queue
         except Exception as e:
             logging.warning(f"ZMQ receive error: {e}")
-            return False
         
-        return False
+        if drained_count > 1:
+            logging.debug(f"Drained {drained_count} stereo frames from ZMQ queue, using latest")
+        
+        # Update with the latest stereo images
+        if latest_left is not None and latest_right is not None:
+            if latest_camera_info:
+                if 'K' in latest_camera_info:
+                    self.K = np.array(latest_camera_info['K'], dtype=np.float32).reshape(3, 3)
+                if 'baseline' in latest_camera_info:
+                    self.baseline = latest_camera_info['baseline']
+            
+            with self.image_lock:
+                self.left_image = latest_left
+                self.right_image = latest_right
+                self.new_image_available = True
+        
+        return received
     
     def _receive_rgb_zmq(self) -> bool:
         """Receive RGB image via ZeroMQ for coloring point cloud."""

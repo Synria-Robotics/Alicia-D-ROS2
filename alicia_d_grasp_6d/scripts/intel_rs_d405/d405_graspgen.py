@@ -104,6 +104,12 @@ class GraspGenerationNode:
         self.data_lock = threading.Lock()
         self.new_data_available = False
         
+        # Timestamps for data freshness tracking
+        # Used to ensure we only process data that arrived after the last processing cycle
+        self.pc_receive_time = 0.0
+        self.mask_receive_time = 0.0
+        self.last_process_time = 0.0
+        
         # Grasp results
         self.grasp_poses = None
         self.grasp_confidences = None
@@ -232,6 +238,7 @@ class GraspGenerationNode:
             with self.data_lock:
                 self.pointcloud = points
                 self.pointcloud_colors = colors
+                self.pc_receive_time = time.time()
                 self.new_data_available = True
             
             # Log first reception and color info
@@ -253,6 +260,7 @@ class GraspGenerationNode:
         if non_zero > 0:
             with self.data_lock:
                 self.mask = mask
+                self.mask_receive_time = time.time()
                 self.new_data_available = True
                 if not getattr(self, '_mask_received_logged', False):
                     logging.info(f"Mask received: shape={mask.shape}, {non_zero} pixels")
@@ -743,13 +751,15 @@ class GraspGenerationNode:
                 with self.data_lock:
                     has_pc = self.pointcloud is not None
                     has_mask = self.mask is not None
-                    has_new = self.new_data_available
+                    pc_fresh = self.pc_receive_time > self.last_process_time
+                    mask_fresh = self.mask_receive_time > self.last_process_time
                     
-                    if not has_new or not has_pc or not has_mask:
+                    if not (has_pc and has_mask and pc_fresh and mask_fresh):
                         # Print status every 5 seconds
                         if time.time() - last_status_time > 5.0:
-                            logging.info(f"Waiting... pointcloud: {'YES' if has_pc else 'NO'}, "
-                                       f"mask: {'YES' if has_mask else 'NO'}")
+                            pc_status = 'fresh' if (has_pc and pc_fresh) else ('stale' if has_pc else 'NO')
+                            mask_status = 'fresh' if (has_mask and mask_fresh) else ('stale' if has_mask else 'NO')
+                            logging.info(f"Waiting... pointcloud: {pc_status}, mask: {mask_status}")
                             last_status_time = time.time()
                         time.sleep(0.1)
                         continue
@@ -758,6 +768,7 @@ class GraspGenerationNode:
                     colors = self.pointcloud_colors.copy() if self.pointcloud_colors is not None else None
                     mask = self.mask.copy()
                     depth = self.depth_image.copy() if self.depth_image is not None else None
+                    self.last_process_time = time.time()
                     self.new_data_available = False
                 
                 # Log data state
@@ -812,13 +823,11 @@ class GraspGenerationNode:
                     input()
                     logging.info("Regenerating grasps...")
                     
-                    # Reset all cached data to force fetching fresh data
-                    with self.data_lock:
-                        self.pointcloud = None
-                        self.pointcloud_colors = None
-                        self.mask = None
-                        self.depth_image = None
-                        self.new_data_available = False
+                    # Note: we do NOT clear cached pointcloud/mask data.
+                    # The timestamp-based freshness check (pc_receive_time > last_process_time)
+                    # ensures we only process data that arrived after the last processing.
+                    # Clearing data here would lose new data that arrived while we were
+                    # blocked on input(), and the bridge won't republish it.
                     
                     # Reset grasp results
                     with self.grasp_lock:
