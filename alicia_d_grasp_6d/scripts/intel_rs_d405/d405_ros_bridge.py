@@ -27,9 +27,9 @@ import cv2
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from sensor_msgs.msg import Image, CameraInfo, PointCloud2, PointField
-from std_msgs.msg import Header
+from std_msgs.msg import Header, Empty
 import message_filters
 
 # ZeroMQ for inter-process communication
@@ -60,6 +60,9 @@ class ROSBridge(Node):
         self.bridge_dir = os.path.join(os.path.dirname(__file__), '.bridge_data')
         os.makedirs(self.bridge_dir, exist_ok=True)
         
+        # Clear stale point cloud files on startup to force fresh generation
+        self._clear_stale_pointcloud_files()
+        
         # Data buffers
         self.stereo_left = None
         self.stereo_right = None
@@ -70,6 +73,9 @@ class ROSBridge(Node):
         # Timestamps for file-based communication
         self.last_mask_timestamp = 0
         self.last_pc_timestamp = 0
+        
+        # Flag to block reading stale PC files during regeneration
+        self.regenerate_in_progress = False
         
         # ZeroMQ sockets
         self.zmq_context = None
@@ -87,6 +93,27 @@ class ROSBridge(Node):
         self.get_logger().info("ROS Bridge (D405) initialized")
         self.get_logger().info(f"Bridge directory: {self.bridge_dir}")
     
+    def _clear_stale_pointcloud_files(self):
+        """Clear stale point cloud files on startup to force fresh generation.
+        
+        This ensures that when the system restarts, it doesn't use old cached
+        point cloud data from a previous session where objects may have been
+        in different positions.
+        """
+        output_dir = os.path.join(os.path.dirname(__file__), 'outputs')
+        files_to_clear = ['pc_timestamp.txt', 'xyz_map.npy', 'colors.npy']
+        
+        for filename in files_to_clear:
+            filepath = os.path.join(output_dir, filename)
+            if os.path.exists(filepath):
+                try:
+                    os.remove(filepath)
+                    self.get_logger().info(f"Cleared stale file: {filename}")
+                except Exception as e:
+                    self.get_logger().warning(f"Failed to clear {filename}: {e}")
+        
+        self.get_logger().info("Stale point cloud cache cleared, waiting for fresh data from FoundationStereo")
+    
     def _init_zmq(self):
         """Initialize ZeroMQ sockets."""
         self.zmq_context = zmq.Context()
@@ -94,7 +121,7 @@ class ROSBridge(Node):
         # Publisher for stereo images (FoundationStereo subscribes)
         try:
             self.stereo_pub_socket = self.zmq_context.socket(zmq.PUB)
-            self.stereo_pub_socket.setsockopt(zmq.SNDHWM, 2)
+            self.stereo_pub_socket.setsockopt(zmq.SNDHWM, 5)
             self.stereo_pub_socket.bind(f"tcp://*:{self.args.stereo_port}")
             self.get_logger().info(f"Stereo publisher on port {self.args.stereo_port}")
         except zmq.error.ZMQError as e:
@@ -160,6 +187,14 @@ class ROSBridge(Node):
             depth=10
         )
         
+        # QoS for latched topics - late subscribers get last message
+        latched_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL
+        )
+        
         # === Stereo IR Subscribers (D405 specific topic names) ===
         self.left_sub = message_filters.Subscriber(
             self, Image, '/camera/camera/infra1/image_rect_raw', qos_profile=sensor_qos)
@@ -181,20 +216,27 @@ class ROSBridge(Node):
             self._rgb_callback, sensor_qos)
         
         # === Publishers (for republishing processed data) ===
+        # Use latched QoS so late-joining subscribers get the last message
         self.pc_pub = self.create_publisher(
-            PointCloud2, '/grasp_6d/pointcloud', reliable_qos)
+            PointCloud2, '/grasp_6d/pointcloud', latched_qos)
         
         self.mask_pub = self.create_publisher(
-            Image, '/grasp_6d/mask', reliable_qos)
+            Image, '/grasp_6d/mask', latched_qos)
         
         # Timer to check for processed data
         self.check_timer = self.create_timer(0.05, self._check_processed_data)
+        
+        # === Regenerate signal (from GraspGen -> FoundationStereo) ===
+        self.regenerate_sub = self.create_subscription(
+            Empty, '/grasp_6d/regenerate',
+            self._regenerate_callback, reliable_qos)
         
         self.get_logger().info("ROS interfaces initialized")
         self.get_logger().info("Subscriptions (D405):")
         self.get_logger().info("  - /camera/camera/infra1/image_rect_raw")
         self.get_logger().info("  - /camera/camera/infra2/image_rect_raw")
         self.get_logger().info("  - /camera/camera/color/image_rect_raw")
+        self.get_logger().info("  - /grasp_6d/regenerate")
         self.get_logger().info("Publishing:")
         self.get_logger().info("  - /grasp_6d/pointcloud")
         self.get_logger().info("  - /grasp_6d/mask")
@@ -215,6 +257,35 @@ class ROSBridge(Node):
                 self.camera_info['baseline'] = abs(baseline)
             else:
                 self.camera_info['baseline'] = 0.018  # D405 default baseline
+    
+    def _regenerate_callback(self, msg: Empty):
+        """Forward regenerate signal to FoundationStereo via ZMQ and file.
+        
+        Sets regenerate_in_progress flag to block reading stale PC files
+        while FoundationStereo is running a fresh inference pass.
+        """
+        self.get_logger().info("Received regenerate signal from GraspGen, forwarding to FoundationStereo...")
+        
+        # Block reading stale PC files until new data arrives
+        self.regenerate_in_progress = True
+        
+        # Forward via ZeroMQ on the stereo pub socket
+        if self.stereo_pub_socket is not None:
+            try:
+                self.stereo_pub_socket.send_multipart([
+                    b"regenerate",
+                    json.dumps({'timestamp': time.time()}).encode('utf-8')
+                ], zmq.NOBLOCK)
+            except zmq.ZMQError as e:
+                self.get_logger().warning(f"ZMQ regenerate send error: {e}")
+        
+        # Also write file-based signal as fallback
+        try:
+            regen_path = os.path.join(self.bridge_dir, 'regenerate_timestamp.txt')
+            with open(regen_path, 'w') as f:
+                f.write(str(time.time()))
+        except Exception as e:
+            self.get_logger().warning(f"File regenerate write error: {e}")
     
     def _stereo_callback(self, left_msg: Image, right_msg: Image):
         """Process synchronized stereo images."""
@@ -363,23 +434,41 @@ class ROSBridge(Node):
         
     
     def _check_pointcloud(self):
-        """Check for point cloud from FoundationStereo."""
+        """Check for point cloud from FoundationStereo.
+        
+        Drains the entire ZMQ queue and keeps only the latest point cloud.
+        When ZMQ delivers data, updates last_pc_timestamp to prevent the
+        file-based fallback from re-publishing the same stale data.
+        
+        During regeneration (regenerate_in_progress=True), skips reading
+        file-based data to avoid re-publishing stale point clouds.
+        """
         pc_data = None
         header = None
         
-        # Try ZeroMQ first
+        # Try ZeroMQ first - drain entire queue, keep only latest
         if self.pc_sub_socket is not None:
             try:
-                parts = self.pc_sub_socket.recv_multipart(zmq.NOBLOCK)
-                if len(parts) >= 3:
-                    header = json.loads(parts[1].decode())
-                    pc_data = parts[2]
+                while True:
+                    parts = self.pc_sub_socket.recv_multipart(zmq.NOBLOCK)
+                    if len(parts) >= 3:
+                        header = json.loads(parts[1].decode())
+                        pc_data = parts[2]
             except zmq.Again:
-                pass
+                pass  # No more messages in queue
             except Exception as e:
                 self.get_logger().warning(f"ZMQ PC receive error: {e}")
         
+        # If we got data from ZMQ, update last_pc_timestamp and clear regenerate flag
+        if pc_data is not None and header is not None:
+            zmq_ts = header.get('timestamp', 0)
+            if zmq_ts > 0:
+                self.last_pc_timestamp = max(self.last_pc_timestamp, zmq_ts)
+            # New data arrived via ZMQ, regeneration is complete
+            self.regenerate_in_progress = False
+        
         # Try file-based fallback
+        # Check file even during regeneration - if file has new timestamp, regeneration is complete
         if pc_data is None:
             output_dir = os.path.join(os.path.dirname(__file__), 'outputs')
             pc_timestamp_path = os.path.join(output_dir, 'pc_timestamp.txt')
@@ -392,6 +481,8 @@ class ROSBridge(Node):
                         timestamp = float(f.read().strip())
                     
                     if timestamp > self.last_pc_timestamp:
+                        # New data in file - regeneration is complete
+                        self.regenerate_in_progress = False
                         self.last_pc_timestamp = timestamp
                         
                         # Load xyz_map and colors
@@ -469,21 +560,38 @@ class ROSBridge(Node):
                 self._pc_pub_logged = True
     
     def _check_mask(self):
-        """Check for mask from SAM2."""
+        """Check for mask from SAM2.
+        
+        Drains the entire ZMQ mask queue and keeps only the latest mask.
+        SAM2 publishes masks at ~30fps, but the bridge timer runs at 20Hz,
+        so stale masks accumulate in the queue. Without draining, GraspGen
+        would receive outdated masks that appear 'fresh' by timestamp.
+        """
         mask = None
         
-        # Try ZeroMQ first
+        # Try ZeroMQ first - drain entire queue, keep only latest
         if self.mask_sub_socket is not None:
+            drained = 0
+            latest_mask_header = None
             try:
-                parts = self.mask_sub_socket.recv_multipart(zmq.NOBLOCK)
-                if len(parts) >= 3:
-                    header = json.loads(parts[1].decode())
-                    H, W = header['height'], header['width']
-                    mask = np.frombuffer(parts[2], dtype=np.uint8).reshape(H, W)
+                while True:
+                    parts = self.mask_sub_socket.recv_multipart(zmq.NOBLOCK)
+                    if len(parts) >= 3:
+                        latest_mask_header = json.loads(parts[1].decode())
+                        H, W = latest_mask_header['height'], latest_mask_header['width']
+                        mask = np.frombuffer(parts[2], dtype=np.uint8).reshape(H, W)
+                        drained += 1
             except zmq.Again:
-                pass
+                pass  # No more messages in queue
             except Exception:
                 pass
+            if drained > 1:
+                self.get_logger().debug(f'Drained {drained} masks from ZMQ queue, using latest')
+            # Update file timestamp to prevent file fallback re-publishing same data
+            if latest_mask_header is not None:
+                zmq_ts = latest_mask_header.get('timestamp', 0)
+                if zmq_ts > 0:
+                    self.last_mask_timestamp = max(self.last_mask_timestamp, zmq_ts)
         
         # Try file-based
         if mask is None:

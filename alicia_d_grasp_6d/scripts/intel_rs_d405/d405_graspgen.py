@@ -36,10 +36,10 @@ sys.path.insert(0, GRASPGEN_DIR)
 try:
     import rclpy
     from rclpy.node import Node
-    from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+    from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
     from sensor_msgs.msg import Image, PointCloud2, PointField, CameraInfo
     from geometry_msgs.msg import PoseArray, Pose
-    from std_msgs.msg import Header, Float32MultiArray, Int32
+    from std_msgs.msg import Header, Float32MultiArray, Int32, Empty
     import message_filters
     ROS_AVAILABLE = True
 except ImportError:
@@ -185,15 +185,23 @@ class GraspGenerationNode:
             depth=10
         )
         
-        # Point cloud subscriber
+        # QoS for latched topics - to receive last message from Bridge
+        latched_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL
+        )
+        
+        # Point cloud subscriber (use latched_qos to receive last message from Bridge)
         self.pc_sub = self.node.create_subscription(
             PointCloud2, '/grasp_6d/pointcloud',
-            self._pointcloud_callback, sensor_qos)
+            self._pointcloud_callback, latched_qos)
         
-        # Mask subscriber
+        # Mask subscriber (use latched_qos to receive last message from Bridge)
         self.mask_sub = self.node.create_subscription(
             Image, '/grasp_6d/mask',
-            self._mask_callback, sensor_qos)
+            self._mask_callback, latched_qos)
         
         # Depth image subscriber (from D405 camera)
         self.depth_sub = self.node.create_subscription(
@@ -213,9 +221,13 @@ class GraspGenerationNode:
             Int32, '/grasp_6d/highlight_index',
             self._highlight_callback, reliable_qos)
         
+        # Regenerate signal publisher - triggers FoundationStereo to re-generate point cloud
+        self.regenerate_pub = self.node.create_publisher(
+            Empty, '/grasp_6d/regenerate', reliable_qos)
+        
         logging.info("ROS 2 node initialized (D405)")
         logging.info("Subscribing to: /grasp_6d/pointcloud, /grasp_6d/mask, /grasp_6d/highlight_index")
-        logging.info("Publishing to: /grasp_6d/grasp_poses")
+        logging.info("Publishing to: /grasp_6d/grasp_poses, /grasp_6d/regenerate")
     
     def _update_camera_params(self):
         """Update camera parameters from CameraParameterManager."""
@@ -747,29 +759,32 @@ class GraspGenerationNode:
         
         try:
             while rclpy.ok():
-                # Check for new data
+                # Check for new data (hold lock briefly, release before sleeping)
+                data_ready = False
                 with self.data_lock:
                     has_pc = self.pointcloud is not None
                     has_mask = self.mask is not None
                     pc_fresh = self.pc_receive_time > self.last_process_time
                     mask_fresh = self.mask_receive_time > self.last_process_time
                     
-                    if not (has_pc and has_mask and pc_fresh and mask_fresh):
-                        # Print status every 5 seconds
-                        if time.time() - last_status_time > 5.0:
-                            pc_status = 'fresh' if (has_pc and pc_fresh) else ('stale' if has_pc else 'NO')
-                            mask_status = 'fresh' if (has_mask and mask_fresh) else ('stale' if has_mask else 'NO')
-                            logging.info(f"Waiting... pointcloud: {pc_status}, mask: {mask_status}")
-                            last_status_time = time.time()
-                        time.sleep(0.1)
-                        continue
-                    
-                    pointcloud = self.pointcloud.copy()
-                    colors = self.pointcloud_colors.copy() if self.pointcloud_colors is not None else None
-                    mask = self.mask.copy()
-                    depth = self.depth_image.copy() if self.depth_image is not None else None
-                    self.last_process_time = time.time()
-                    self.new_data_available = False
+                    if has_pc and has_mask and pc_fresh and mask_fresh:
+                        pointcloud = self.pointcloud.copy()
+                        colors = self.pointcloud_colors.copy() if self.pointcloud_colors is not None else None
+                        mask = self.mask.copy()
+                        depth = self.depth_image.copy() if self.depth_image is not None else None
+                        self.last_process_time = time.time()
+                        self.new_data_available = False
+                        data_ready = True
+                
+                # Lock is released here — sleep and status logging happen without holding it
+                if not data_ready:
+                    if time.time() - last_status_time > 5.0:
+                        pc_status = 'fresh' if (has_pc and pc_fresh) else ('stale' if has_pc else 'NO')
+                        mask_status = 'fresh' if (has_mask and mask_fresh) else ('stale' if has_mask else 'NO')
+                        logging.info(f"Waiting... pointcloud: {pc_status}, mask: {mask_status}")
+                        last_status_time = time.time()
+                    time.sleep(0.1)
+                    continue
                 
                 # Log data state
                 logging.info(f"Processing data: {len(pointcloud)} points, "
@@ -823,11 +838,17 @@ class GraspGenerationNode:
                     input()
                     logging.info("Regenerating grasps...")
                     
-                    # Note: we do NOT clear cached pointcloud/mask data.
-                    # The timestamp-based freshness check (pc_receive_time > last_process_time)
-                    # ensures we only process data that arrived after the last processing.
-                    # Clearing data here would lose new data that arrived while we were
-                    # blocked on input(), and the bridge won't republish it.
+                    # CRITICAL: Update last_process_time to NOW to invalidate all
+                    # data received before Enter was pressed. Without this, stale
+                    # masks that were continuously forwarded by the bridge during
+                    # the user's think time would appear "fresh" (their receive_time
+                    # > old last_process_time) and get paired with the new point cloud.
+                    with self.data_lock:
+                        self.last_process_time = time.time()
+                    
+                    # Signal FoundationStereo to regenerate point cloud
+                    logging.info("Sending regenerate signal to FoundationStereo...")
+                    self.regenerate_pub.publish(Empty())
                     
                     # Reset grasp results
                     with self.grasp_lock:

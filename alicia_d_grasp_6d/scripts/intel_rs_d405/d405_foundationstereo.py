@@ -114,6 +114,11 @@ class FoundationStereoNode:
         self.bridge_dir = os.path.join(SCRIPT_DIR, '.bridge_data')
         self.last_timestamp = 0
         self.last_rgb_timestamp = 0
+        # Initialize from existing file to prevent spurious triggers from stale files
+        self.last_regen_file_timestamp = self._read_regen_file_timestamp()
+        
+        # Regenerate signal (triggered by GraspGen via bridge)
+        self.regenerate_requested = threading.Event()
         
         # Statistics
         self.inference_times = deque(maxlen=10)
@@ -163,10 +168,11 @@ class FoundationStereoNode:
             try:
                 self.zmq_context = zmq.Context()
                 
-                # Subscriber for receiving stereo images from bridge
+                # Subscriber for receiving stereo images and regenerate signals from bridge
                 self.zmq_sub_socket = self.zmq_context.socket(zmq.SUB)
                 self.zmq_sub_socket.connect(f"tcp://localhost:{self.args.bridge_port}")
                 self.zmq_sub_socket.setsockopt_string(zmq.SUBSCRIBE, "stereo")
+                self.zmq_sub_socket.setsockopt_string(zmq.SUBSCRIBE, "regenerate")
                 self.zmq_sub_socket.setsockopt(zmq.RCVTIMEO, 100)  # 100ms timeout
                 
                 # Subscriber for receiving RGB images from bridge
@@ -208,11 +214,18 @@ class FoundationStereoNode:
         drained_count = 0
         
         # Drain the queue to get the latest stereo images
+        # Also detect regenerate signals mixed in the same socket
         try:
             while True:
                 parts = self.zmq_sub_socket.recv_multipart(zmq.NOBLOCK)
-                if len(parts) >= 4:
-                    topic = parts[0].decode()
+                topic = parts[0].decode()
+                
+                if topic == "regenerate":
+                    self.regenerate_requested.set()
+                    logging.debug("Received regenerate signal via ZMQ")
+                    continue
+                
+                if topic == "stereo" and len(parts) >= 4:
                     header = json.loads(parts[1].decode())
                     left_data = parts[2]
                     right_data = parts[3]
@@ -421,8 +434,15 @@ class FoundationStereoNode:
         
         return colors.reshape(H, W, 3)
     
-    def _publish_pointcloud_zmq(self, xyz_map: np.ndarray, colors: np.ndarray):
-        """Publish colored point cloud via ZeroMQ."""
+    def _publish_pointcloud_zmq(self, xyz_map: np.ndarray, colors: np.ndarray, timestamp: float = None):
+        """Publish colored point cloud via ZeroMQ.
+        
+        Args:
+            xyz_map: Point cloud XYZ map (H, W, 3)
+            colors: RGB colors (H, W, 3)
+            timestamp: Shared timestamp for consistency with file-based path.
+                       If None, uses current time.
+        """
         if self.zmq_pub_socket is None:
             logging.debug("ZMQ pub socket not available, skipping publish")
             return
@@ -458,7 +478,7 @@ class FoundationStereoNode:
             pc_data = b''.join(data)
             
             header = {
-                'timestamp': time.time(),
+                'timestamp': timestamp if timestamp is not None else time.time(),
                 'num_points': len(points),
                 'frame_id': 'camera_link',
             }
@@ -476,8 +496,16 @@ class FoundationStereoNode:
         except Exception as e:
             logging.warning(f"ZMQ publish error: {e}")
     
-    def _save_pointcloud_file(self, xyz_map: np.ndarray, colors: np.ndarray, depth: np.ndarray):
-        """Save colored point cloud to shared files."""
+    def _save_pointcloud_file(self, xyz_map: np.ndarray, colors: np.ndarray, depth: np.ndarray, timestamp: float = None):
+        """Save colored point cloud to shared files.
+        
+        Args:
+            xyz_map: Point cloud XYZ map (H, W, 3)
+            colors: RGB colors (H, W, 3)
+            depth: Depth map in meters (H, W)
+            timestamp: Shared timestamp for consistency with ZMQ path.
+                       If None, uses current time.
+        """
         output_dir = os.path.join(SCRIPT_DIR, 'outputs')
         os.makedirs(output_dir, exist_ok=True)
         
@@ -507,9 +535,9 @@ class FoundationStereoNode:
                                                    radius=self.args.denoise_radius)
             o3d.io.write_point_cloud(os.path.join(output_dir, 'pointcloud.ply'), pcd)
             
-            # Write timestamp to signal new data
+            # Write timestamp to signal new data (use shared timestamp for consistency)
             with open(os.path.join(output_dir, 'pc_timestamp.txt'), 'w') as f:
-                f.write(str(time.time()))
+                f.write(str(timestamp if timestamp is not None else time.time()))
                 
         except Exception as e:
             logging.warning(f"Failed to save point cloud: {e}")
@@ -638,8 +666,78 @@ class FoundationStereoNode:
         vis.destroy_window()
         cv2.destroyAllWindows()
     
+    def _read_regen_file_timestamp(self) -> float:
+        """Read the current regenerate file timestamp (for initialization)."""
+        regen_path = os.path.join(os.path.join(SCRIPT_DIR, '.bridge_data'), 'regenerate_timestamp.txt')
+        if os.path.exists(regen_path):
+            try:
+                with open(regen_path, 'r') as f:
+                    return float(f.read().strip())
+            except Exception:
+                pass
+        return 0.0
+
+    def _check_regenerate_file(self) -> bool:
+        """Check for file-based regenerate signal from bridge."""
+        regen_path = os.path.join(self.bridge_dir, 'regenerate_timestamp.txt')
+        if not os.path.exists(regen_path):
+            return False
+        try:
+            with open(regen_path, 'r') as f:
+                timestamp = float(f.read().strip())
+            if timestamp > self.last_regen_file_timestamp:
+                self.last_regen_file_timestamp = timestamp
+                return True
+        except Exception:
+            pass
+        return False
+    
+    def _wait_for_regenerate(self):
+        """Wait for a regenerate signal from GraspGen (via bridge).
+        
+        Blocks until the regenerate signal is received via ZMQ or file.
+        During the wait, we keep draining ZMQ queues so stereo/RGB images
+        stay fresh.
+        """
+        logging.info("")
+        logging.info("Waiting for regenerate signal from GraspGen...")
+        logging.info("(Press Ctrl+C to quit)")
+        
+        self.regenerate_requested.clear()
+        
+        while not self.regenerate_requested.is_set():
+            # Drain stereo + regenerate signals from ZMQ
+            self._receive_images_zmq()
+            # Drain RGB
+            self._receive_rgb_zmq()
+            # Check file-based regenerate
+            if self._check_regenerate_file():
+                self.regenerate_requested.set()
+                break
+            time.sleep(0.05)
+        
+        logging.info("Regenerate signal received!")
+        
+        # Sync file timestamp to prevent spurious triggers on the next wait.
+        # If the signal came via ZMQ, the file may also have been written with
+        # the same timestamp. Update last_regen_file_timestamp so the next
+        # _check_regenerate_file() call won't trigger on the same file.
+        regen_path = os.path.join(self.bridge_dir, 'regenerate_timestamp.txt')
+        try:
+            if os.path.exists(regen_path):
+                with open(regen_path, 'r') as f:
+                    ts = float(f.read().strip())
+                self.last_regen_file_timestamp = max(self.last_regen_file_timestamp, ts)
+        except Exception:
+            pass
+    
     def run(self):
-        """Main run loop."""
+        """Main run loop.
+        
+        First run: waits for stereo+RGB images, runs inference, publishes point cloud.
+        Subsequent runs: waits for a regenerate signal from GraspGen (via bridge),
+        then grabs latest images, re-runs inference, and re-publishes.
+        """
         logging.info("=" * 60)
         logging.info("FoundationStereo Perception Node (Intel RealSense D405)")
         logging.info("=" * 60)
@@ -651,6 +749,7 @@ class FoundationStereoNode:
         logging.info("=" * 60)
         logging.info("")
         logging.info("FEATURE: Point cloud will be colored using RGB camera")
+        logging.info("NOTE: Regeneration is triggered by GraspGen (no manual Enter needed)")
         logging.info("")
         logging.info("Make sure d405_ros_bridge.py is running in another terminal:")
         logging.info("  python d405_ros_bridge.py")
@@ -752,7 +851,6 @@ class FoundationStereoNode:
                     logging.info("  Point cloud colored with grayscale (no RGB)")
                 
                 # Visualize only on first run if --visualize flag is set
-                # Do this BEFORE publishing so GraspGen receives fresh data after visualization
                 if first_run and self.args.visualize:
                     logging.info("")
                     logging.info("Opening point cloud visualization...")
@@ -768,25 +866,22 @@ class FoundationStereoNode:
                 
                 first_run = False
                 
-                # Publish/save colored point cloud (after visualization so GraspGen gets fresh data)
-                self._publish_pointcloud_zmq(xyz_map, colors)
-                self._save_pointcloud_file(xyz_map, colors, depth)
+                # Publish/save colored point cloud with a shared timestamp
+                # to ensure ZMQ and file paths use the exact same value.
+                publish_timestamp = time.time()
+                self._publish_pointcloud_zmq(xyz_map, colors, publish_timestamp)
+                self._save_pointcloud_file(xyz_map, colors, depth, publish_timestamp)
                 
                 logging.info("")
                 logging.info("=" * 50)
                 logging.info("Point cloud published successfully!")
                 logging.info("=" * 50)
                 
-                # Wait for user to press Enter to re-run
+                # Wait for regenerate signal from GraspGen (via bridge)
+                # This replaces the old input() wait
+                self._wait_for_regenerate()
                 logging.info("")
-                logging.info("Press Enter to regenerate point cloud, or Ctrl+C to quit...")
-                try:
-                    input()
-                    logging.info("")
-                    logging.info("Regenerating point cloud...")
-                except EOFError:
-                    # Non-interactive mode - wait a bit and continue
-                    time.sleep(1.0)
+                logging.info("Regenerating point cloud...")
                 
         except KeyboardInterrupt:
             logging.info("Shutting down...")

@@ -96,8 +96,6 @@ python d405_foundationstereo.py --visualize
 - `--z_far`: 最大深度
 - `--denoise_cloud`: 启用点云去噪（默认开启）
 
-> 该节点推理过程较长，需稍适等待。输出深度图后，按q退出图片，方可发布点云话题。
-
 
 <p align="center"><img src="../imgs/D405_FoundationStereo.png" width="500" /></p>
 
@@ -136,6 +134,9 @@ python d405_graspgen.py
 - `--topk_num_grasps`: 返回 top-k 抓取（默认 100）
 
 <p align="center"><img src="../imgs/D405_GraspGen.png" width="500" /></p>
+
+**交互操作**:
+- ``Enter``：重新生成抓取位姿
 
 ## 文件说明
 

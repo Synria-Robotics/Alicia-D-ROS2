@@ -42,7 +42,7 @@ ROS_AVAILABLE = False
 try:
     import rclpy
     from rclpy.node import Node
-    from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+    from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
     from sensor_msgs.msg import Image
     from std_msgs.msg import Header
     ROS_AVAILABLE = True
@@ -161,13 +161,21 @@ class SAM2SegmentationNode:
                 depth=1
             )
             
+            # QoS for latched mask - late subscribers get last message
+            latched_qos = QoSProfile(
+                reliability=ReliabilityPolicy.RELIABLE,
+                history=HistoryPolicy.KEEP_LAST,
+                depth=1,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL
+            )
+            
             # D405 specific topic
             self.image_sub = self.node.create_subscription(
                 Image, '/camera/camera/color/image_rect_raw',
                 self._image_callback, sensor_qos)
             
             self.mask_pub = self.node.create_publisher(
-                Image, '/grasp_6d/mask', 10)
+                Image, '/grasp_6d/mask', latched_qos)
             
             logging.info("ROS 2 node initialized (D405)")
             logging.info("Subscribing to: /camera/camera/color/image_rect_raw")
