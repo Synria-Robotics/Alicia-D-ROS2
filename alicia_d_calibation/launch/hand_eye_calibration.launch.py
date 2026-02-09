@@ -66,7 +66,7 @@ def generate_launch_description():
     
     calibration_method_arg = DeclareLaunchArgument(
         'calibration_method',
-        default_value='tsai',
+        default_value='daniilidis',
         description='Hand-eye calibration method (tsai, park, horaud, daniilidis, andreff)'
     )
     
