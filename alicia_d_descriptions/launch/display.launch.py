@@ -20,7 +20,7 @@ def launch_setup(context, *args, **kwargs):
     urdf_file = os.path.join(
         pkg_dir, 'urdf', 
         f'Alicia_D_{robot_version}',
-        f'Alicia_D_gripper_{gripper_type}.urdf'
+        f'Alicia_D_{robot_version}_gripper_{gripper_type}.urdf'
     )
     
     # Log which URDF is being loaded
