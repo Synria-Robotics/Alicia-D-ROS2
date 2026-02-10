@@ -38,9 +38,11 @@ try:
     from rclpy.node import Node
     from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
     from sensor_msgs.msg import Image, PointCloud2, PointField, CameraInfo
-    from geometry_msgs.msg import PoseArray, Pose
+    from geometry_msgs.msg import PoseArray, Pose, PoseStamped
     from std_msgs.msg import Header, Float32MultiArray, Int32, Empty
     import message_filters
+    from tf2_ros import Buffer, TransformListener
+    from tf2_ros import TransformException
     ROS_AVAILABLE = True
 except ImportError:
     ROS_AVAILABLE = False
@@ -65,6 +67,7 @@ from utils.camera_utils import (
     DEFAULT_IR_K, DEFAULT_RGB_K, DEFAULT_T_IR_TO_RGB,
     DEFAULT_IR_RESOLUTION, DEFAULT_RGB_RESOLUTION, DEFAULT_BASELINE
 )
+from utils.transform_utils import load_hand_eye_calibration, transform_pose_to_base
 
 
 class GraspGenerationNode:
@@ -95,6 +98,18 @@ class GraspGenerationNode:
         # Use IR intrinsics for general point cloud operations
         self.K = self.K_ir
         self.camera_info_received = False  # Will be set to True after fetching from ROS
+        
+        # Hand-eye calibration (gripper_center -> camera_link)
+        self.T_gripper_to_cam = None
+        self._load_hand_eye_calibration()
+        
+        # TF buffer for getting gripper pose
+        self.tf_buffer = None
+        self.tf_listener = None
+        
+        # Current gripper pose in base frame (updated from TF)
+        self.T_base_to_gripper = None
+        self.gripper_pose_lock = threading.Lock()
         
         # Data buffers
         self.pointcloud = None
@@ -133,10 +148,24 @@ class GraspGenerationNode:
         
         # Initialize meshcat visualizer
         self._init_meshcat()
-        
+    
         # Initialize ROS if available
         if ROS_AVAILABLE:
             self._init_ros()
+    
+    def _load_hand_eye_calibration(self):
+        """Load hand-eye calibration from YAML file."""
+        calibration_path = self.args.calibration_file
+        if calibration_path and os.path.exists(calibration_path):
+            try:
+                self.T_gripper_to_cam = load_hand_eye_calibration(calibration_path)
+                logging.info(f"Loaded hand-eye calibration from: {calibration_path}")
+            except Exception as e:
+                logging.warning(f"Failed to load hand-eye calibration: {e}")
+                self.T_gripper_to_cam = None
+        else:
+            logging.warning(f"Hand-eye calibration file not found: {calibration_path}")
+            self.T_gripper_to_cam = None
     
     def _load_model(self):
         """Load GraspGen model."""
@@ -225,6 +254,10 @@ class GraspGenerationNode:
         self.regenerate_pub = self.node.create_publisher(
             Empty, '/grasp_6d/regenerate', reliable_qos)
         
+        # TF2 buffer and listener for getting gripper pose
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self.node)
+        
         logging.info("ROS 2 node initialized (D405)")
         logging.info("Subscribing to: /grasp_6d/pointcloud, /grasp_6d/mask, /grasp_6d/highlight_index")
         logging.info("Publishing to: /grasp_6d/grasp_poses, /grasp_6d/regenerate")
@@ -241,6 +274,67 @@ class GraspGenerationNode:
             self.camera_info_received = True
             return True
         return False
+    
+    def _get_gripper_pose_from_tf(self) -> bool:
+        """
+        Get current gripper pose in base frame from TF.
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        if self.tf_buffer is None:
+            return False
+        
+        try:
+            # Look up transform from base to gripper_center
+            transform = self.tf_buffer.lookup_transform(
+                'base_link',  # target frame
+                'gripper_center',  # source frame
+                rclpy.time.Time(),  # latest available
+                timeout=rclpy.duration.Duration(seconds=0.5)
+            )
+            
+            # Convert to 4x4 matrix
+            t = transform.transform.translation
+            q = transform.transform.rotation
+            
+            T = np.eye(4)
+            T[:3, 3] = [t.x, t.y, t.z]
+            T[:3, :3] = R.from_quat([q.x, q.y, q.z, q.w]).as_matrix()
+            
+            with self.gripper_pose_lock:
+                self.T_base_to_gripper = T
+            
+            return True
+            
+        except TransformException as e:
+            logging.debug(f"Failed to get gripper pose from TF: {e}")
+            return False
+    
+    def _get_camera_to_base_transform(self) -> np.ndarray:
+        """
+        Compute transform from camera frame to base frame.
+        
+        T_base_cam = T_base_gripper @ T_gripper_cam
+        
+        Returns:
+            T_cam_to_base: 4x4 transform matrix, or None if not available
+        """
+        if self.T_gripper_to_cam is None:
+            logging.warning("Hand-eye calibration not loaded")
+            return None
+        
+        with self.gripper_pose_lock:
+            T_base_to_gripper = self.T_base_to_gripper
+        
+        if T_base_to_gripper is None:
+            logging.warning("Gripper pose not available from TF")
+            return None
+        
+        # T_base_to_cam = T_base_to_gripper @ T_gripper_to_cam
+        T_base_to_cam = T_base_to_gripper @ self.T_gripper_to_cam
+        
+        return T_base_to_cam
     
     def _pointcloud_callback(self, msg: 'PointCloud2'):
         """Process incoming point cloud with RGB colors."""
@@ -594,7 +688,9 @@ class GraspGenerationNode:
         """
         Visualize COLORED point cloud and grasps in meshcat.
         
-        KEY FEATURE: Uses RGB colors from the point cloud.
+        KEY FEATURE: 
+        - Uses RGB colors from the point cloud
+        - Transforms to base frame before centering (if hand-eye calibration available)
         """
         if self.vis is None:
             return
@@ -603,12 +699,31 @@ class GraspGenerationNode:
             # Clear previous visualization
             self.vis.delete()
             
-            # Center point cloud for visualization
-            pc_center = object_points.mean(axis=0)
-            pc_centered = object_points - pc_center
+            # Get camera-to-base transform
+            T_base_to_cam = self._get_camera_to_base_transform()
+            
+            if T_base_to_cam is not None:
+                # Transform point cloud from camera frame to base frame
+                N = len(object_points)
+                points_homo = np.hstack([object_points, np.ones((N, 1))])  # (N, 4)
+                points_base = (T_base_to_cam @ points_homo.T).T[:, :3]  # (N, 3)
+                
+                # Transform grasps from camera frame to base frame
+                grasps_base = np.array([T_base_to_cam @ g for g in grasps])
+                
+                logging.info("Transformed point cloud and grasps to base frame")
+            else:
+                # Fallback: use camera frame directly
+                points_base = object_points
+                grasps_base = grasps
+                logging.warning("Using camera frame (base transform not available)")
+            
+            # Center point cloud for visualization (now in base frame)
+            pc_center = points_base.mean(axis=0)
+            pc_centered = points_base - pc_center
             
             # Shift grasps accordingly
-            grasps_centered = grasps.copy()
+            grasps_centered = grasps_base.copy()
             grasps_centered[:, :3, 3] -= pc_center
             
             # Ensure colors are valid - must have same length as points
@@ -786,6 +901,10 @@ class GraspGenerationNode:
                     time.sleep(0.1)
                     continue
                 
+                # Get current gripper pose from TF (needed for base frame visualization)
+                if not self._get_gripper_pose_from_tf():
+                    logging.warning("Could not get gripper pose from TF, visualization will be in camera frame")
+                
                 # Log data state
                 logging.info(f"Processing data: {len(pointcloud)} points, "
                            f"colors: {colors.shape if colors is not None else 'None'}, "
@@ -953,6 +1072,10 @@ def main():
     parser.add_argument('--mask_dilation', type=int, default=0,
                        help='Dilation kernel size for mask (0 to disable). '
                             'Use small values (3-5) if some edge points are missed.')
+    parser.add_argument('--calibration_file', type=str,
+                       default=os.path.join(SCRIPT_DIR, '..', '..', '..', 'alicia_d_calibation',
+                                           'config', 'hand_eye_calibration_result.yaml'),
+                       help='Path to hand-eye calibration YAML file')
     
     args = parser.parse_args()
     
@@ -965,7 +1088,8 @@ def main():
     logging.info(f"Gripper config: {args.gripper_config}")
     logging.info(f"Grasp threshold: {args.grasp_threshold}")
     logging.info(f"Num grasps: {args.num_grasps}, Top-K: {args.topk_num_grasps}")
-    logging.info("FEATURE: Colored point cloud visualization")
+    logging.info(f"Calibration file: {args.calibration_file}")
+    logging.info("FEATURE: Colored point cloud visualization in BASE frame")
     logging.info("=" * 60)
     
     node = GraspGenerationNode(args)
