@@ -124,7 +124,7 @@ grasp_offsets:
 # -----------------------------------------------------------------------------
 gripper:
   open: 0.0               # Gripper open position (MoveIt joint value)
-  closed: 0.025           # Gripper closed position for grasping cubes
+  closed: 0.020           # Gripper closed position for grasping cubes
   grasp_force: 0.5        # Grasp force (if supported by gripper)
 
 # -----------------------------------------------------------------------------
@@ -140,9 +140,9 @@ motion:
 # -----------------------------------------------------------------------------
 # Multi-frame confirmation to filter out noise detections
 detection_confirmation:
-  confirm_count: 5          # Number of consecutive frames to confirm detection
-  distance_threshold: 0.002 # Max distance (m) to consider same cube across frames
-  timeout: 2.0              # Timeout (s) to forget unconfirmed detections
+  confirm_count: 10         # Number of consecutive frames to confirm detection
+  distance_threshold: 0.001 # Max distance (m) to consider same cube across frames
+  timeout: 0.05             # Timeout (s) to forget unconfirmed detections
 
 # -----------------------------------------------------------------------------
 # TF Frame Names

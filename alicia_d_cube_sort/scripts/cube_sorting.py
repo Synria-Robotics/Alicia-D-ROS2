@@ -305,8 +305,8 @@ class CubeSorter(Node):
         self.get_logger().info('=' * 60)
         
         if self.auto_start:
-            self.get_logger().info('Auto-starting workflow in 3 seconds...')
-            time.sleep(3)
+            self.get_logger().info('Auto-starting workflow in 1 seconds...')
+            time.sleep(1)
             self.workflow_state = "idle"
     
     def _on_cubes_green(self, msg: PoseArray):
