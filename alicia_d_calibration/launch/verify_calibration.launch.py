@@ -10,6 +10,70 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
+import rclpy
+from rclpy.node import Node as RclpyNode
+from tf2_ros import Buffer, TransformListener
+import time
+
+
+def get_tf_as_matrix(source_frame: str, target_frame: str, timeout_sec: float = 5.0) -> np.ndarray:
+    """
+    从 TF 读取 source_frame -> target_frame 的变换，并返回 4x4 齐次变换矩阵。
+    
+    Args:
+        source_frame: 源坐标系
+        target_frame: 目标坐标系
+        timeout_sec: 等待 TF 的超时时间
+        
+    Returns:
+        4x4 齐次变换矩阵，如果失败返回 None
+    """
+    # 初始化 rclpy（如果尚未初始化）
+    if not rclpy.ok():
+        rclpy.init()
+    
+    # 创建临时节点用于 TF 查询
+    node = RclpyNode('_tf_lookup_temp_node')
+    tf_buffer = Buffer()
+    tf_listener = TransformListener(tf_buffer, node)
+    
+    try:
+        # 等待 TF 可用
+        start_time = time.time()
+        transform = None
+        
+        while time.time() - start_time < timeout_sec:
+            rclpy.spin_once(node, timeout_sec=0.1)
+            try:
+                transform = tf_buffer.lookup_transform(
+                    source_frame, target_frame, rclpy.time.Time())
+                break
+            except Exception:
+                pass
+        
+        if transform is None:
+            print(f"[警告] 无法在 {timeout_sec} 秒内获取 TF: {source_frame} -> {target_frame}")
+            return None
+        
+        # 提取平移和旋转
+        t = transform.transform.translation
+        q = transform.transform.rotation
+        
+        # 构建 4x4 矩阵
+        r_mat = R.from_quat([q.x, q.y, q.z, q.w]).as_matrix()
+        m = np.eye(4)
+        m[:3, :3] = r_mat
+        m[:3, 3] = [t.x, t.y, t.z]
+        
+        print(f"[TF] 成功读取 {source_frame} -> {target_frame}:")
+        print(f"     平移: [{t.x:.6f}, {t.y:.6f}, {t.z:.6f}]")
+        print(f"     四元数: [{q.x:.6f}, {q.y:.6f}, {q.z:.6f}, {q.w:.6f}]")
+        
+        return m
+        
+    finally:
+        node.destroy_node()
+
 
 def load_calibration_result(context, *args, **kwargs):
     """加载标定结果，进行坐标系转换，并创建节点"""
@@ -54,20 +118,14 @@ def load_calibration_result(context, *args, **kwargs):
     m_calib[:3, :3] = r_calib.as_matrix()
     m_calib[:3, 3] = t_calib
 
-    # 2. 构建相机内部矩阵 T_link_optical
+    # 2. 从 TF 读取相机内部矩阵 T_link_optical (camera_link -> camera_color_optical_frame)
+    print("\n[TF] 正在从 TF 读取 camera_link -> camera_color_optical_frame 变换...")
+    m_internal = get_tf_as_matrix('camera_link', 'camera_color_optical_frame', timeout_sec=5.0)
     
-    # m_internal = np.array([
-    #     [ 0.0, -0.0,  1.0, 0.002],
-    #     [-1.0, -0.0, -0.0, -0.014],
-    #     [ 0.0, -1.0,  0.0, 0.000],
-    #     [ 0.0,  0.0,  0.0, 1.0]
-    # ])
-    m_internal = np.array([
-        [ -0.001, -0.001,  1.000, 0.000],
-        [ -1.000, 0.001, -0.001, -0.000],
-        [ -0.001, -1.000,  -0.001, 0.000],
-        [ 0.000,  0.000,  0.000, 1.000]
-    ])
+    if m_internal is None:
+        print("[错误] 无法从 TF 获取 camera_link -> camera_color_optical_frame 变换")
+        print("       请确保相机节点已启动并发布 TF")
+        return []
 
     # 3. 计算最终变换 T_gripper_link = T_gripper_optical * inv(T_link_optical)
     m_final = m_calib @ np.linalg.inv(m_internal)
