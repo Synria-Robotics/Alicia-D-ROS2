@@ -61,7 +61,7 @@ from scipy.spatial.transform import Rotation as R
 # Configuration paths
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CALIBRATION_PATH = os.path.join(
-    SCRIPT_DIR, '..', '..', '..', 'alicia_d_calibation', 'config', 'hand_eye_calibration_result.yaml'
+    SCRIPT_DIR, '..', '..', '..', 'alicia_d_calibration', 'config', 'hand_eye_calibration_result.yaml'
 )
 
 

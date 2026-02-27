@@ -7,7 +7,7 @@
 
 ## 📋 模块说明
 
-**alicia_d_calibation** 是一个完整的手眼标定解决方案，用于：
+**alicia_d_calibration** 是一个完整的手眼标定解决方案，用于：
 - 计算机械臂末端与相机之间的空间关系
 - 输出标定结果转换矩阵
 - 支持各种 ArUco 标记配置
@@ -16,7 +16,7 @@
 ## 📁 文件结构
 
 ```
-alicia_d_calibation/
+alicia_d_calibration/
 ├── scripts/
 │   ├── hand_eye_calibration.py             # 手眼标定主脚本
 │   ├── generate_calibration_poses.py       # 生成标定位置序列

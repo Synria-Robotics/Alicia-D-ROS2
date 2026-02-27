@@ -214,12 +214,12 @@ class CubeDetector(Node):
         # Try to find the calibration file
         if not os.path.isabs(calibration_path):
             try:
-                # Look in alicia_d_calibation package
+                # Look in alicia_d_calibration package
                 pkg_share = get_package_share_directory('alicia_d_calibration')
                 workspace_root = os.path.abspath(
                     os.path.join(pkg_share, '..', '..', '..', '..'))
                 calibration_path = os.path.join(
-                    workspace_root, 'src', 'alicia_d_calibation', 'config', 
+                    workspace_root, 'src', 'alicia_d_calibration', 'config', 
                     self.calibration_file)
             except Exception:
                 pass

@@ -39,7 +39,7 @@ def load_calibration_and_create_nodes(context, *args, **kwargs):
             workspace_root = os.path.abspath(
                 os.path.join(pkg_share, '..', '..', '..', '..'))
             calibration_path = os.path.join(
-                workspace_root, 'src', 'alicia_d_calibation', 'config', 
+                workspace_root, 'src', 'alicia_d_calibration', 'config', 
                 calibration_file)
         except Exception:
             pass

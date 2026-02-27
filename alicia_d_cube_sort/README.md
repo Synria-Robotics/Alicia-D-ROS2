@@ -5,7 +5,7 @@
 > [!warning]
 > 本模块以 Intel Realsense D405 和 Orbbec Gemini 335 相机为例。如使用其它相机，可能需要修改相关文件。
 
-前置模块： [alicia_d_calibation](../alicia_d_calibation) - 手眼标定
+前置模块： [alicia_d_calibration](../alicia_d_calibration) - 手眼标定
 
 ## 📋 模块说明
 

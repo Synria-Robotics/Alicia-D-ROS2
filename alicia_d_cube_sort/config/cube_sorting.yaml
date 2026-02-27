@@ -36,7 +36,7 @@ camera:
   depth_info_topic: "/camera/camera/depth/camera_info"
 
 # -----------------------------------------------------------------------------
-# Hand-Eye Calibration File Path (relative to alicia_d_calibation package)
+# Hand-Eye Calibration File Path (relative to alicia_d_calibration package)
 # -----------------------------------------------------------------------------
 calibration_file: "hand_eye_calibration_result.yaml"
 

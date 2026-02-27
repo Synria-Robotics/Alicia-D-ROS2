@@ -1073,7 +1073,7 @@ def main():
                        help='Dilation kernel size for mask (0 to disable). '
                             'Use small values (3-5) if some edge points are missed.')
     parser.add_argument('--calibration_file', type=str,
-                       default=os.path.join(SCRIPT_DIR, '..', '..', '..', 'alicia_d_calibation',
+                       default=os.path.join(SCRIPT_DIR, '..', '..', '..', 'alicia_d_calibration',
                                            'config', 'hand_eye_calibration_result.yaml'),
                        help='Path to hand-eye calibration YAML file')
     

@@ -888,9 +888,9 @@ class HandEyeCalibration(Node):
             # 获取包的 share 目录（install 目录）
             package_share_dir = get_package_share_directory('alicia_d_calibration')
             # 从 install 目录推断源码目录
-            # install/alicia_d_calibration/share/alicia_d_calibration -> src/alicia_d_calibation
+            # install/alicia_d_calibration/share/alicia_d_calibration -> src/alicia_d_calibration
             workspace_root = os.path.abspath(os.path.join(package_share_dir, '..', '..', '..', '..'))
-            config_dir = os.path.join(workspace_root, 'src', 'alicia_d_calibation', 'config')
+            config_dir = os.path.join(workspace_root, 'src', 'alicia_d_calibration', 'config')
         except Exception as e:
             # 如果获取包路径失败，回退到使用脚本相对路径
             self.get_logger().warn(f'无法获取包路径: {e}，使用脚本相对路径')

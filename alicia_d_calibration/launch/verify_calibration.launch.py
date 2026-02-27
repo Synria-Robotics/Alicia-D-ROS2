@@ -25,7 +25,7 @@ def load_calibration_result(context, *args, **kwargs):
         try:
             package_share_dir = get_package_share_directory('alicia_d_calibration')
             workspace_root = os.path.abspath(os.path.join(package_share_dir, '..', '..', '..', '..'))
-            calibration_file = os.path.join(workspace_root, 'src', 'alicia_d_calibation', 'config', calibration_file)
+            calibration_file = os.path.join(workspace_root, 'src', 'alicia_d_calibration', 'config', calibration_file)
         except Exception:
             pass
     
