@@ -19,7 +19,7 @@
 alicia_d_calibration/
 ├── scripts/
 │   ├── hand_eye_calibration.py             # 手眼标定主脚本
-│   ├── generate_calibration_poses.py       # 生成标定位置序列
+│   ├── calibration_verifier.py             # 标定验证脚本
 │   └── aruco_detector.py                   # ArUco 标记检测器
 ├── launch/
 │   ├── hand_eye_calibration.launch.py      # 标定启动文件
@@ -100,10 +100,34 @@ ros2 launch orbbec_camera gemini_330_series.launch.py \
 conda activate calib
 ```
 
-执行标定启动文件（默认适配Realsense D405）：
+执行标定启动文件（眼在手内，默认适配Realsense D405）：
 
 ```bash
-ros2 launch alicia_d_calibration hand_eye_calibration.launch.py
+ros2 launch alicia_d_calibration hand_eye_calibration.launch.py \
+calibration_type:=eye_in_hand
+```
+眼在手外，默认适配Realsense D405：
+
+```bash
+ros2 launch alicia_d_calibration hand_eye_calibration.launch.py \
+calibration_type:=eye_to_hand
+```
+
+若需要让末端更低（眼在手外时标定板偏高），可调整 Joint2/Joint3 偏移量（负值会降低末端）：
+
+```bash
+ros2 launch alicia_d_calibration hand_eye_calibration.launch.py \
+    calibration_type:=eye_to_hand \
+    eye_to_hand_joint2_offset:=-0.04 \
+    eye_to_hand_joint3_offset:=-0.06
+```
+
+若不确定算法效果，可启用自动算法选择（会比较多种算法的稳定性）：
+
+```bash
+ros2 launch alicia_d_calibration hand_eye_calibration.launch.py \
+    calibration_type:=eye_to_hand \
+    calibration_method:=auto
 ```
 
 若使用Gemini 335相机，请添加参数：
@@ -146,6 +170,15 @@ ros2 run rqt_tf_tree rqt_tf_tree --force-discover
 ```bash
 ros2 run tf2_ros tf2_echo base_link aruco_marker_frame
 ```
+
+若标定类型为 `eye_to_hand`（眼在手外，标记固定在末端），请改为：
+```bash
+ros2 run tf2_ros tf2_echo gripper_center aruco_marker_frame
+```
+
+> [!note]
+> 验证脚本会输出稳定性指标（`std_t` / `std_r`），若平移标准差在 2cm 以上或旋转标准差在 2° 以上，
+> 通常意味着数据质量不佳（光照、遮挡、标记抖动或采样不足）。
 
 同时可在``rviz``中添加``pointcloud2``，观察点云与机械臂的相对位置关系。
 

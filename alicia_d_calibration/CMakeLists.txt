@@ -16,7 +16,7 @@ ament_python_install_package(${PROJECT_NAME})
 # Install Python scripts
 install(PROGRAMS
   scripts/hand_eye_calibration.py
-  scripts/generate_calibration_poses.py
+  scripts/calibration_verifier.py
   scripts/aruco_detector.py
   DESTINATION lib/${PROJECT_NAME}
 )

@@ -57,6 +57,12 @@ def generate_launch_description():
         default_value='gripper_center',
         description='Robot end effector link name'
     )
+
+    calibration_type_arg = DeclareLaunchArgument(
+        'calibration_type',
+        default_value='eye_in_hand',
+        description='Calibration type: eye_in_hand or eye_to_hand'
+    )
     
     min_samples_arg = DeclareLaunchArgument(
         'min_samples',
@@ -67,7 +73,7 @@ def generate_launch_description():
     calibration_method_arg = DeclareLaunchArgument(
         'calibration_method',
         default_value='daniilidis',
-        description='Hand-eye calibration method (tsai, park, horaud, daniilidis, andreff)'
+        description='Hand-eye calibration method (tsai, park, horaud, daniilidis, andreff, auto)'
     )
     
     output_file_arg = DeclareLaunchArgument(
@@ -80,6 +86,30 @@ def generate_launch_description():
         'marker_distance',
         default_value='0.32',
         description='Distance from ArUco marker to base_link in meters'
+    )
+
+    eye_to_hand_joint5_center_arg = DeclareLaunchArgument(
+        'eye_to_hand_joint5_center',
+        default_value='0.85',
+        description='Eye-to-hand: Joint5 center angle for marker facing camera (rad)'
+    )
+
+    eye_to_hand_joint5_span_arg = DeclareLaunchArgument(
+        'eye_to_hand_joint5_span',
+        default_value='0.35',
+        description='Eye-to-hand: Joint5 perturbation range around center (rad)'
+    )
+
+    eye_to_hand_joint2_offset_arg = DeclareLaunchArgument(
+        'eye_to_hand_joint2_offset',
+        default_value='0.0',
+        description='Eye-to-hand: Joint2 offset (rad), negative lowers end-effector'
+    )
+
+    eye_to_hand_joint3_offset_arg = DeclareLaunchArgument(
+        'eye_to_hand_joint3_offset',
+        default_value='0.0',
+        description='Eye-to-hand: Joint3 offset (rad), negative lowers end-effector'
     )
     
     # 手眼标定节点
@@ -96,17 +126,22 @@ def generate_launch_description():
             'camera_info_topic': LaunchConfiguration('camera_info_topic'),
             'base_link': LaunchConfiguration('base_link'),
             'end_effector_link': LaunchConfiguration('end_effector_link'),
+            'calibration_type': LaunchConfiguration('calibration_type'),
             'min_samples': LaunchConfiguration('min_samples'),
             'calibration_method': LaunchConfiguration('calibration_method'),
             'output_file': LaunchConfiguration('output_file'),
             'marker_distance': LaunchConfiguration('marker_distance'),
+            'eye_to_hand_joint5_center': LaunchConfiguration('eye_to_hand_joint5_center'),
+            'eye_to_hand_joint5_span': LaunchConfiguration('eye_to_hand_joint5_span'),
+            'eye_to_hand_joint2_offset': LaunchConfiguration('eye_to_hand_joint2_offset'),
+            'eye_to_hand_joint3_offset': LaunchConfiguration('eye_to_hand_joint3_offset'),
         }],
     )
     
     return LaunchDescription([
         # 日志信息
         LogInfo(msg='========================================'),
-        LogInfo(msg='Alicia-D Hand-Eye Calibration (Eye-in-Hand)'),
+        LogInfo(msg='Alicia-D Hand-Eye Calibration'),
         LogInfo(msg='========================================'),
         LogInfo(msg='Make sure the robot and camera are started:'),
         LogInfo(msg='  1. ros2 launch alicia_d_moveit real_robot.launch.py'),
@@ -121,10 +156,15 @@ def generate_launch_description():
         camera_info_topic_arg,
         base_link_arg,
         end_effector_link_arg,
+        calibration_type_arg,
         min_samples_arg,
         calibration_method_arg,
         output_file_arg,
         marker_distance_arg,
+        eye_to_hand_joint5_center_arg,
+        eye_to_hand_joint5_span_arg,
+        eye_to_hand_joint2_offset_arg,
+        eye_to_hand_joint3_offset_arg,
         
         # 节点
         calibration_node,
