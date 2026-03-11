@@ -90,30 +90,58 @@ ros2 launch orbbec_camera gemini_330_series.launch.py \
 
 ### 3. 运行标定
 
-> 请将ArUco码平放在机械臂正前方30～35cm处。
+**终端 3：执行标定启动文件**  
 
-**终端 3：执行标定启动文件**
+ **3.1 眼在手内（Eye-in-Hand）**
+ 
 
-激活 ``conda`` 环境:
+>**准备 ArUco 标记**：标记固定在工作台或墙面上，保持不动。建议距离相机 25-45cm，标记平面尽量正对相机视角，避免强反光。
+
+
+**终端：激活环境**
 
 ```bash
 conda activate calib
 ```
 
-执行标定启动文件（眼在手内，默认适配Realsense D405）：
+**启动标定（默认 Realsense D405）：**
 
 ```bash
 ros2 launch alicia_d_calibration hand_eye_calibration.launch.py \
-calibration_type:=eye_in_hand
+    calibration_type:=eye_in_hand
 ```
-眼在手外，默认适配Realsense D405：
+
+**若使用 Gemini 335 相机，请添加参数：**
 
 ```bash
 ros2 launch alicia_d_calibration hand_eye_calibration.launch.py \
-calibration_type:=eye_to_hand
+    calibration_type:=eye_in_hand \
+    camera_topic:=/camera/color/image_raw \
+    camera_info_topic:=/camera/color/camera_info
 ```
 
-若需要让末端更低（眼在手外时标定板偏高），可调整 Joint2/Joint3 偏移量（负值会降低末端）：
+**3.2 眼在手外（Eye-to-Hand）**
+
+>眼在手外外参标定环境要求高，同时对于机械臂末端执行器的安装要求也较高，建议零基础用户优先尝试眼在手内标定。标定完成后不能移动相机位置和机械臂基座位置，否则需要重新标定。
+
+**准备 ArUco 标记**：标记固定在末端执行器上（夹具或夹爪），确保安装牢固，不晃动。
+
+<p align="center"><img src="../imgs/eye_to_hand_example.png" width="400" height="500" /></p>
+
+**终端：激活环境**
+
+```bash
+conda activate calib
+```
+
+**启动标定（默认 Realsense D405）：**
+
+```bash
+ros2 launch alicia_d_calibration hand_eye_calibration.launch.py \
+    calibration_type:=eye_to_hand
+```
+
+**若末端偏高（标记偏离相机视野），可调整 Joint2/Joint3 偏移量：**
 
 ```bash
 ros2 launch alicia_d_calibration hand_eye_calibration.launch.py \
@@ -122,7 +150,7 @@ ros2 launch alicia_d_calibration hand_eye_calibration.launch.py \
     eye_to_hand_joint3_offset:=-0.06
 ```
 
-若不确定算法效果，可启用自动算法选择（会比较多种算法的稳定性）：
+**若不确定算法效果，可启用自动算法选择：**
 
 ```bash
 ros2 launch alicia_d_calibration hand_eye_calibration.launch.py \
@@ -130,15 +158,25 @@ ros2 launch alicia_d_calibration hand_eye_calibration.launch.py \
     calibration_method:=auto
 ```
 
-若使用Gemini 335相机，请添加参数：
+**若使用 Gemini 335 相机，请添加参数：**
 
 ```bash
 ros2 launch alicia_d_calibration hand_eye_calibration.launch.py \
+    calibration_type:=eye_to_hand \
     camera_topic:=/camera/color/image_raw \
     camera_info_topic:=/camera/color/camera_info
 ```
 
-标定结束后，标定结果会自动保存在 ``alicia_d_calibration/config/hand_eye_calibration_result.yaml``
+标定结束后，标定结果会自动保存在 `alicia_d_calibration/config/hand_eye_calibration_result.yaml`
+
+**3.3 标定注意事项（强烈建议阅读）**
+
+- 相机内参必须正确，否则标定结果会系统性偏差。
+- 标记必须清晰可见，避免遮挡、强反光。
+- 采集过程中机械臂不要抖动或碰撞标记。
+- 眼在手外时，标记固定在末端，确保安装刚性、无松动。
+- 眼在手内时，标记固定在环境，确保标记不移动。
+- 若标定不稳定，优先检查光照、标记尺寸、相机曝光和采样范围。
 
 <p align="center"><img src="../imgs/eye_in_hand_calib.png" width="500" /></p>
 
@@ -180,7 +218,7 @@ ros2 run tf2_ros tf2_echo gripper_center aruco_marker_frame
 > 验证脚本会输出稳定性指标（`std_t` / `std_r`），若平移标准差在 2cm 以上或旋转标准差在 2° 以上，
 > 通常意味着数据质量不佳（光照、遮挡、标记抖动或采样不足）。
 
-同时可在``rviz``中添加``pointcloud2``，观察点云与机械臂的相对位置关系。
+
 
 ## ✅ 标定流程
 
