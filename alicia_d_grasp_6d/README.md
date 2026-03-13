@@ -138,6 +138,103 @@ python d405_graspgen.py
 **交互操作**:
 - ``Enter``：重新生成抓取位姿
 
+
+## Gemini 335 使用流程
+
+以下流程与 D405 一致，但脚本与启动命令切换为 Gemini 335 对应版本。
+
+### 1. 启动机械臂和相机
+
+```bash
+ros2 launch alicia_d_moveit real_robot.launch.py
+```
+
+```bash
+ros2 launch orbbec_camera gemini_330_series.launch.py \
+    enable_left_ir:=true \
+    enable_right_ir:=true \
+    enable_point_cloud:=true \
+    enable_colored_point_cloud:=true
+```
+
+### 2. 启动 ROS 桥接节点
+
+```bash
+# 系统 Python 环境
+python3 gemini_ros_bridge.py
+```
+
+### 3. 启动 MeshCat 可视化服务器
+
+```bash
+# GraspGen 环境
+conda activate GraspGen
+meshcat-server
+```
+在浏览器中打开输出链接。
+
+### 4. 启动抓取执行节点
+
+```bash
+# 系统 Python 环境（退出conda）
+python3 gemini_execution.py
+```
+
+**交互操作**:
+- `y`：执行当前抓取
+- `n`：跳过，查看下一个
+- `q`：退出
+
+### 5. 启动深度估计节点（FoundationStereo）
+
+```bash
+# FoundationStereo 环境
+conda activate foundation_stereo
+python gemini_foundationstereo.py --visualize
+```
+
+**参数**:
+- `--ckpt_dir`: 模型权重路径
+- `--scale`: 图像缩放比例
+- `--z_far`: 最大深度
+- `--denoise_cloud`: 启用点云去噪（默认开启）
+
+### 6. 启动目标分割节点（SAM2）
+
+```bash
+# SAM2 环境
+conda activate sam2
+python gemini_sam2.py
+```
+
+**参数**:
+- `--model`: 模型大小 [tiny/small/base/large]（默认 large）
+- `--bridge_port`: ZeroMQ 端口
+
+**交互操作**:
+- 左键点击：添加正样本点（目标区域）
+- 右键点击：添加负样本点（背景区域）
+- `r` 键：重置
+- `q`：退出
+
+### 7. 启动抓取生成节点（GraspGen）
+
+```bash
+# GraspGen 环境
+conda activate GraspGen
+python gemini_graspgen.py
+```
+
+**参数**:
+- `--gripper_config`: 夹爪配置文件
+- `--grasp_threshold`: 置信度阈值（默认 0.8）
+- `--num_grasps`: 生成抓取数量（默认 200）
+- `--topk_num_grasps`: 返回 top-k 抓取（默认 100）
+
+**交互操作**:
+- ``Enter``：重新生成抓取位姿
+
+
 ## 文件说明
 
 | 文件 | 功能 |

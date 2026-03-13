@@ -150,13 +150,6 @@ ros2 launch alicia_d_calibration hand_eye_calibration.launch.py \
     eye_to_hand_joint3_offset:=-0.06
 ```
 
-**若不确定算法效果，可启用自动算法选择：**
-
-```bash
-ros2 launch alicia_d_calibration hand_eye_calibration.launch.py \
-    calibration_type:=eye_to_hand \
-    calibration_method:=auto
-```
 
 **若使用 Gemini 335 相机，请添加参数：**
 
