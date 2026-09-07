@@ -31,10 +31,9 @@ sudo apt install -y \
   ros-humble-rviz-common \
   ros-humble-rviz-default-plugins
 
-# TF and warehouse
+# TF
 sudo apt install -y \
-  ros-humble-tf2-ros \
-  ros-humble-warehouse-ros-mongo
+  ros-humble-tf2-ros
 
 # Serial communication
 sudo apt install -y \
